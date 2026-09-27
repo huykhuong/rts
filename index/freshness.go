@@ -217,7 +217,7 @@ func WriteFingerprints(projectRoot string, fp *Fingerprints) error {
 	}
 
 	outPath := filepath.Join(dir, "fingerprints.json")
-	if err := os.WriteFile(outPath, data, 0644); err != nil {
+	if err := writeFileAtomic(outPath, data); err != nil {
 		return fmt.Errorf("writing %s: %w", outPath, err)
 	}
 	return nil

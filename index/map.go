@@ -437,7 +437,7 @@ func WriteMap(projectRoot string, pm *ProjectMap) error {
 	}
 
 	outPath := filepath.Join(dir, "map.json")
-	if err := os.WriteFile(outPath, data, 0644); err != nil {
+	if err := writeFileAtomic(outPath, data); err != nil {
 		return fmt.Errorf("writing %s: %w", outPath, err)
 	}
 

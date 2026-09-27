@@ -92,12 +92,6 @@ func SessionContext(input PreToolUseInput, now time.Time) string {
 		return ""
 	}
 
-	switch input.Source {
-	case "startup", "clear", "compact", "":
-	default:
-		return ""
-	}
-
 	root := input.Cwd
 	if root == "" {
 		var err error
@@ -106,7 +100,17 @@ func SessionContext(input PreToolUseInput, now time.Time) string {
 		}
 	}
 
-	return brief.Render(root, brief.Options{Now: now})
+	// Refreshed on every start, a resume included: a resumed session skips
+	// the brief, but it still calls find_symbol against the index.
+	drift, refreshing := refreshIfStale(root)
+
+	switch input.Source {
+	case "startup", "clear", "compact", "":
+	default:
+		return ""
+	}
+
+	return brief.Render(root, brief.Options{Now: now, Drift: drift, Refreshing: refreshing})
 }
 
 func writeDeny(w io.Writer, reason string) error {

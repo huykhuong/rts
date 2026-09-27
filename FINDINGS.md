@@ -147,6 +147,51 @@ push back, and none of them require anybody to remember to tidy up:
 - **A person can delete one.** `rts insights rm <id>`, without having to ask a
   model to do it.
 
+### The index keeps itself current
+
+Two weeks of real use in a large Rails repo settled the question of whether
+anyone would run `rts index` by hand: nobody did. Across 38 Claude Code
+sessions the index sat **17 days old**, and `find_symbol` spent that whole
+stretch missing whatever had been added since. Every session opened on a map
+of a codebase that had moved on.
+
+The `SessionStart` hook (`hook/refresh.go`, `refreshIfStale`) now closes that
+gap itself. On every start it checks drift with the same content
+fingerprints described above (`index.CheckDrift`), and if the code has
+actually changed, it starts `rts index` as a detached background process and
+returns immediately — the session never waits on it. A reindex of a
+~4,100-file Rails app takes about 1.7s, and the MCP server reloads
+`symbols.json` whenever its mtime moves, so `find_symbol` is current a moment
+after the session opens. Because drift is content-based, a restamp with
+identical content — rebase, checkout — does not trigger a reindex. The brief
+that session receives says a refresh is under way and that its map is from
+the previous run, rather than telling the reader to go run `rts index`. A
+resumed session is refreshed too — it skips the brief, but still uses
+`find_symbol`. And this is opt-in: only a project that already has
+`.rts/symbols.json` is ever touched, so opening Claude Code in some other
+repo never creates a `.rts` directory there. An index written before
+fingerprints existed can't be checked, so it's rebuilt outright — the
+rebuild is what gives it fingerprints in the first place.
+
+Running unattended creates two risks a manual, one-off run never had:
+
+- **Two sessions opening together would start two indexes writing the same
+  files.** `rts index` now takes a lock (`.rts/index.lock`); a second run
+  sees it held and skips, since the run already in flight produces the same
+  index. A lock older than 5 minutes is treated as left by a dead run and is
+  broken. The lock is released before exiting on failure — `os.Exit` skips
+  deferred calls, so that release could not be left to a `defer`.
+- **The MCP server could reload `symbols.json` mid-write and read truncated
+  JSON.** The derived stores are now written through a temp file plus
+  rename (`index/safewrite.go`), so a reader sees the old file or the new
+  one, never half of one.
+
+Honest limits: the session that triggers a refresh still opens on the old
+map — the new one is ready moments later, not immediately. And the
+`SessionStart` hook logs nothing, so there is no measurement yet of how
+often refreshes actually run, or whether the brief's "refresh under way"
+message helps compared to silence.
+
 ### What it does not do
 
 - **Nothing generates the findings automatically.** Bionic's data layer — the

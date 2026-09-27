@@ -100,7 +100,7 @@ func Write(projectRoot string, symbols []Symbol) error {
 	}
 
 	outPath := filepath.Join(dir, "symbols.json")
-	if err := os.WriteFile(outPath, data, 0644); err != nil {
+	if err := writeFileAtomic(outPath, data); err != nil {
 		return fmt.Errorf("writing %s: %w", outPath, err)
 	}
 

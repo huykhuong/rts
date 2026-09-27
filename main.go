@@ -117,15 +117,37 @@ func runIndex() {
 		os.Exit(1)
 	}
 
-	symbols, err := index.BuildIndex(root)
+	// The SessionStart hook starts this in the background whenever the code
+	// has drifted, so two sessions opening together would otherwise run two
+	// indexes writing the same files. The second one skips: the run already
+	// in flight is producing the index it would have.
+	release, ok, err := index.AcquireLock(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[rts index] error: %v\n", err)
 		os.Exit(1)
 	}
+	if !ok {
+		fmt.Fprintln(os.Stderr, "[rts index] another index run is in progress here; skipping")
+		return
+	}
+	defer release()
+
+	// Failures past this point release the lock before exiting: os.Exit
+	// skips deferred calls, and a lock left behind blocks every automatic
+	// reindex in this project until it goes stale.
+	fail := func(err error) {
+		fmt.Fprintf(os.Stderr, "[rts index] error: %v\n", err)
+		release()
+		os.Exit(1)
+	}
+
+	symbols, err := index.BuildIndex(root)
+	if err != nil {
+		fail(err)
+	}
 
 	if err := index.Write(root, symbols); err != nil {
-		fmt.Fprintf(os.Stderr, "[rts index] error: %v\n", err)
-		os.Exit(1)
+		fail(err)
 	}
 
 	// Fingerprints before the map: the map's own staleness warning is read

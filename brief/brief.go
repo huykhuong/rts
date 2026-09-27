@@ -46,6 +46,16 @@ type Options struct {
 	// The walk is cheap but not free, and a caller rendering the brief on a
 	// hot path can decline to pay for it.
 	SkipStaleness bool
+
+	// Drift is a drift check the caller already made. When set, the brief
+	// uses it instead of walking the tree a second time — the SessionStart
+	// hook checks drift itself, to decide whether to start a reindex.
+	Drift *index.Drift
+
+	// Refreshing says a reindex was started in the background for this
+	// session. The map below it is then the previous run's, and the brief
+	// says so instead of telling the reader to do what is already happening.
+	Refreshing bool
 }
 
 // Render composes the brief for a project. It returns an empty string when
@@ -81,8 +91,8 @@ func Render(projectRoot string, opts Options) string {
 	}
 	renderFindings(&buf, findings)
 
-	if pm != nil && !opts.SkipStaleness {
-		renderStaleness(&buf, projectRoot, pm, opts.Now)
+	if pm != nil {
+		renderStaleness(&buf, projectRoot, pm, opts)
 	}
 	if pm == nil {
 		buf.WriteString("\nNo project map for this repo — run `rts index` to build one.\n")
@@ -185,14 +195,38 @@ func renderFindings(buf *strings.Builder, findings []insight.Insight) {
 // compared mtimes and reported 493 changed files an hour after a rebase, 492
 // of them byte-identical, which is precisely the crying-wolf this guards
 // against.
-func renderStaleness(buf *strings.Builder, projectRoot string, pm *index.ProjectMap, now time.Time) {
-	drift, err := index.CheckDrift(projectRoot)
-	if err != nil || !drift.Stale() {
+func renderStaleness(buf *strings.Builder, projectRoot string, pm *index.ProjectMap, opts Options) {
+	age := humanAge(opts.Now.Sub(pm.GeneratedAt))
+
+	if opts.Refreshing {
+		if opts.Drift != nil && opts.Drift.Stale() {
+			fmt.Fprintf(buf, "\n! Index is behind the code: %s since it was built (%s). Refreshing it in the background now.\n",
+				opts.Drift.Describe(), age)
+		} else {
+			// No drift to report means the index predates content
+			// fingerprints, so nothing could say whether it was current.
+			fmt.Fprintf(buf, "\n! Index was built (%s) without content fingerprints, so its freshness can't be checked. Rebuilding it in the background now.\n", age)
+		}
+		buf.WriteString("  This map is from the previous run; find_symbol picks up the new index by itself within a few seconds.\n")
 		return
 	}
 
-	fmt.Fprintf(buf, "\n! Index is behind the code: %s since it was built (%s).\n",
-		drift.Describe(), humanAge(now.Sub(pm.GeneratedAt)))
+	drift := opts.Drift
+	if drift == nil {
+		if opts.SkipStaleness {
+			return
+		}
+		checked, err := index.CheckDrift(projectRoot)
+		if err != nil {
+			return
+		}
+		drift = &checked
+	}
+	if !drift.Stale() {
+		return
+	}
+
+	fmt.Fprintf(buf, "\n! Index is behind the code: %s since it was built (%s).\n", drift.Describe(), age)
 	buf.WriteString("  find_symbol may miss or point at stale lines. Run `rts index` to refresh.\n")
 }
 
