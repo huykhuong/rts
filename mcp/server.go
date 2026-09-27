@@ -30,11 +30,16 @@ func Start(buildTime string) {
 		cwd = "."
 	}
 
-	indexCache := NewIndexCache(cwd)
+	// A linked git worktree has no .rts/ of its own — see index.ResolveRoot —
+	// so every store below is rooted at the main checkout's when there is
+	// one, not the worktree's own working directory.
+	root := index.ResolveRoot(cwd)
+
+	indexCache := NewIndexCache(root)
 
 	// Create a new session
 	sessionID := generateSessionID()
-	logger := NewEventLogger(sessionID, cwd)
+	logger := NewEventLogger(sessionID, root)
 
 	for {
 		// 1. Read incoming message line from Claude
@@ -56,7 +61,7 @@ func Start(buildTime string) {
 		case "tools/list":
 			handleToolsList(msg.ID)
 		case "tools/call":
-			handleToolsCall(line, msg.ID, cwd, sessionID, cache, indexCache, logger)
+			handleToolsCall(line, msg.ID, root, sessionID, cache, indexCache, logger)
 		}
 	}
 }

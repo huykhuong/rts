@@ -116,6 +116,10 @@ func runIndex() {
 		fmt.Fprintf(os.Stderr, "[rts index] error: %v\n", err)
 		os.Exit(1)
 	}
+	// A linked git worktree has no .rts/ of its own — see index.ResolveRoot
+	// — so `rts index` run inside one reindexes the main checkout instead,
+	// consistent with every other RTS command.
+	root = index.ResolveRoot(root)
 
 	// The SessionStart hook starts this in the background whenever the code
 	// has drifted, so two sessions opening together would otherwise run two
@@ -176,6 +180,7 @@ func runBrief() {
 		fmt.Fprintf(os.Stderr, "[rts brief] error: %v\n", err)
 		os.Exit(1)
 	}
+	root = index.ResolveRoot(root)
 
 	text := brief.Render(root, brief.Options{})
 	if text == "" {
@@ -193,6 +198,7 @@ func runInsights(args []string) {
 		fmt.Fprintf(os.Stderr, "[rts insights] error: %v\n", err)
 		os.Exit(1)
 	}
+	root = index.ResolveRoot(root)
 
 	if len(args) >= 1 && args[0] == "rm" {
 		if len(args) < 2 {

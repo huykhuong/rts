@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"rts/brief"
+	"rts/index"
 )
 
 // PreToolUseInput models the JSON Claude Code sends on stdin. We only
@@ -99,6 +100,11 @@ func SessionContext(input PreToolUseInput, now time.Time) string {
 			return ""
 		}
 	}
+
+	// A linked git worktree has no .rts/ of its own — see index.ResolveRoot
+	// — so a session that starts inside one is oriented from its main
+	// checkout's stores instead of starting from nothing.
+	root = index.ResolveRoot(root)
 
 	// Refreshed on every start, a resume included: a resumed session skips
 	// the brief, but it still calls find_symbol against the index.

@@ -54,6 +54,10 @@ func Run(w io.Writer, buildTime string) {
 	if err != nil {
 		projectRoot = "."
 	}
+	// A linked git worktree has no .rts/ of its own — see index.ResolveRoot
+	// — so doctor reports on the main checkout's stores, the ones RTS
+	// actually reads and writes from here.
+	projectRoot = index.ResolveRoot(projectRoot)
 
 	// An unresolvable home dir isn't fatal here; the individual checks
 	// that need it report it themselves.

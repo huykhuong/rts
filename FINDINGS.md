@@ -192,6 +192,31 @@ map — the new one is ready moments later, not immediately. And the
 often refreshes actually run, or whether the brief's "refresh under way"
 message helps compared to silence.
 
+### Worktrees share the main checkout's memory
+
+Real sessions run inside git worktrees created under a project's main
+checkout (`.claude/worktrees/<name>/`), and `.rts/` is gitignored, so a
+worktree never has one of its own. Across the last two weeks, 35 of 73
+sessions ran in such a worktree since 2026-09-13: no `SessionStart` brief, no
+recorded findings, and a `find_symbol` that told each of them to run `rts
+index`, as if the project had never been touched.
+
+The rule now is that a linked worktree uses its main checkout's `.rts/` — for
+reading, writing, and indexing (`index.ResolveRoot`). This resolves cleanly
+because symbol paths in the index are stored relative to the project root:
+the main checkout's index describes the same code the worktree has checked
+out, just from a different directory, so it still resolves correctly against
+the worktree's own files. Findings become shared across every worktree as a
+side effect, rather than siloed one store per checkout.
+
+`ResolveRoot` parses `.git`, `commondir` and the worktree's own `.git` file
+directly rather than running `git rev-parse` — the MCP server is launched
+with an empty environment (`env: {}`), so `git` is not on its PATH there.
+
+Honest limit: a symbol added only on a worktree's own branch is not in the
+main index until that code reaches the main checkout, so `find_symbol` misses
+it there in the meantime.
+
 ### What it does not do
 
 - **Nothing generates the findings automatically.** Bionic's data layer — the
