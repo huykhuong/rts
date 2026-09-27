@@ -3,6 +3,7 @@ package index
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -191,6 +192,149 @@ func TestShouldIndex(t *testing.T) {
 		if got := shouldIndex(tc.path); got != tc.want {
 			t.Errorf("shouldIndex(%q) = %v, want %v", tc.path, got, tc.want)
 		}
+	}
+}
+
+func TestSkipDir(t *testing.T) {
+	// The directory-level counterpart to shouldIndex: hidden directories are
+	// skipped (a worktree under .claude/worktrees/<name>/ is a full copy of
+	// the codebase, and .ruby-lsp/.github/.agents/.fly are tooling, not
+	// project source), except the walk root itself, which WalkDir always
+	// visits first and which must still be indexed even when its own name
+	// starts with a dot.
+	tests := []struct {
+		name string
+		path string
+		dir  string
+		root string
+		want bool
+	}{
+		{"named skip dir", "/proj/vendor", "vendor", "/proj", true},
+		{"hidden dir", "/proj/.claude", ".claude", "/proj", true},
+		{"nested hidden dir", "/proj/.claude/worktrees", "worktrees", "/proj", false},
+		{"ordinary dir", "/proj/app", "app", "/proj", false},
+		{"hidden root is never skipped", "/proj/.hidden-project", ".hidden-project", "/proj/.hidden-project", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := skipDir(tc.path, tc.dir, tc.root); got != tc.want {
+				t.Errorf("skipDir(%q, %q, %q) = %v, want %v", tc.path, tc.dir, tc.root, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildIndex_SkipsWorktreesAndOtherHiddenDirs(t *testing.T) {
+	// The bug this exists for: git worktrees under .claude/worktrees/<name>/
+	// are full copies of the codebase, and BuildIndex walked into them,
+	// tripling every symbol and pointing find_symbol at stale copies most of
+	// the time. Other dotdirs (.ruby-lsp here) are tooling, not source.
+	root := t.TempDir()
+	writeFile(t, root, "app/models/user.rb", "class User\nend\n")
+	writeFile(t, root, ".claude/worktrees/feature/app/models/user.rb", "class User\n  def stale; end\nend\n")
+	writeFile(t, root, ".ruby-lsp/thing.rb", "class Thing\nend\n")
+
+	symbols, err := BuildIndex(root)
+	if err != nil {
+		t.Fatalf("BuildIndex: %v", err)
+	}
+
+	for _, sym := range symbols {
+		if strings.Contains(sym.Path, ".claude") || strings.Contains(sym.Path, ".ruby-lsp") {
+			t.Errorf("symbol from hidden directory leaked into the index: %+v", sym)
+		}
+	}
+	if len(symbols) != 1 || symbols[0].Path != "app/models/user.rb" {
+		t.Errorf("symbols = %+v, want exactly one symbol from app/models/user.rb", symbols)
+	}
+}
+
+func TestBuildFingerprints_SkipsWorktreesAndOtherHiddenDirs(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "app/models/user.rb", "class User\nend\n")
+	writeFile(t, root, ".claude/worktrees/feature/app/models/user.rb", "class User\n  def stale; end\nend\n")
+	writeFile(t, root, ".ruby-lsp/thing.rb", "class Thing\nend\n")
+
+	fp, err := BuildFingerprints(root)
+	if err != nil {
+		t.Fatalf("BuildFingerprints: %v", err)
+	}
+
+	if len(fp.Files) != 1 {
+		t.Fatalf("Files = %+v, want exactly app/models/user.rb", fp.Files)
+	}
+	if _, ok := fp.Files["app/models/user.rb"]; !ok {
+		t.Errorf("Files = %+v, missing app/models/user.rb", fp.Files)
+	}
+}
+
+func TestBuildMap_ExcludesHiddenDirsFromDirsAndLargest(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "app/models/user.rb", "class User\nend\n")
+	// Big enough to clear largeFileLines if it were ever counted.
+	var big strings.Builder
+	big.WriteString("class User\n")
+	for i := 0; i < largeFileLines+10; i++ {
+		big.WriteString("  def m; end\n")
+	}
+	big.WriteString("end\n")
+	writeFile(t, root, ".claude/worktrees/feature/app/models/user.rb", big.String())
+	writeFile(t, root, ".ruby-lsp/thing.rb", "class Thing\nend\n")
+
+	symbols := []Symbol{
+		{Name: "User", Kind: "class", Path: "app/models/user.rb", Line: 1},
+	}
+
+	pm, err := BuildMap(root, symbols)
+	if err != nil {
+		t.Fatalf("BuildMap: %v", err)
+	}
+
+	for _, d := range pm.Dirs {
+		if strings.Contains(d.Path, ".claude") || strings.Contains(d.Path, ".ruby-lsp") {
+			t.Errorf("Dirs contains a hidden-directory entry: %+v", d)
+		}
+	}
+	for _, f := range pm.Largest {
+		if strings.Contains(f.Path, ".claude") || strings.Contains(f.Path, ".ruby-lsp") {
+			t.Errorf("Largest contains a hidden-directory entry: %+v", f)
+		}
+	}
+}
+
+func TestCheckDrift_NewFileUnderHiddenDirIsNotDrift(t *testing.T) {
+	root := indexed(t, map[string]string{
+		"app/models/user.rb": "class User\nend\n",
+	})
+
+	// A new worktree copy appearing after the index was built must not be
+	// reported as an addition — it was never in scope to begin with.
+	writeFile(t, root, ".claude/worktrees/feature/app/models/ghost.rb", "class Ghost\nend\n")
+
+	drift, err := CheckDrift(root)
+	if err != nil {
+		t.Fatalf("CheckDrift: %v", err)
+	}
+	if drift.Stale() {
+		t.Errorf("a file added under a hidden directory was reported as drift: %+v", drift)
+	}
+}
+
+func TestBuildIndex_RootNamedWithLeadingDotIsStillIndexed(t *testing.T) {
+	// A project whose own directory happens to start with a dot must still
+	// be indexed: WalkDir visits the root first, and skipDir must never
+	// treat that first callback as a hidden directory to skip.
+	parent := t.TempDir()
+	root := filepath.Join(parent, ".hidden-project")
+	writeFile(t, root, "app/models/user.rb", "class User\nend\n")
+
+	symbols, err := BuildIndex(root)
+	if err != nil {
+		t.Fatalf("BuildIndex: %v", err)
+	}
+	if len(symbols) != 1 || symbols[0].Path != "app/models/user.rb" {
+		t.Errorf("symbols = %+v, want exactly one symbol from app/models/user.rb", symbols)
 	}
 }
 

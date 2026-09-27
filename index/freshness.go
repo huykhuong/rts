@@ -130,6 +130,27 @@ func shouldIndex(path string) bool {
 	return true
 }
 
+// skipDir is the single answer to "should this directory be excluded from
+// the walk?", asked by the indexer, the map builder and the freshness check
+// alike — the directory-level counterpart to shouldIndex above.
+//
+// Hidden directories are skipped alongside the named entries in skippedDirs:
+// a real Rails repo kept git worktrees under .claude/worktrees/<name>/, each
+// a full copy of the codebase, and the index walked into all three, tripling
+// every symbol and pointing find_symbol at stale worktree copies most of the
+// time. Other dotdirs (.ruby-lsp, .github, .agents, .fly) are tooling, not
+// project source, and are excluded for the same reason.
+//
+// The walk root itself is never skipped: filepath.WalkDir invokes the
+// callback on the root before anything else, and a project whose own
+// directory name starts with a dot must still be indexed.
+func skipDir(path, name, root string) bool {
+	if path == root {
+		return false
+	}
+	return skippedDirs[name] || strings.HasPrefix(name, ".")
+}
+
 // fingerprint hashes a file's bytes. FNV-64a: this detects change, it does
 // not defend against a forger, and a non-cryptographic hash is the right
 // trade for something run over several thousand files.
@@ -152,7 +173,7 @@ func BuildFingerprints(projectRoot string) (*Fingerprints, error) {
 			return nil
 		}
 		if d.IsDir() {
-			if skippedDirs[d.Name()] {
+			if skipDir(path, d.Name(), projectRoot) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -243,7 +264,7 @@ func CheckDrift(projectRoot string) (Drift, error) {
 			return nil
 		}
 		if d.IsDir() {
-			if skippedDirs[d.Name()] {
+			if skipDir(path, d.Name(), projectRoot) {
 				return filepath.SkipDir
 			}
 			return nil

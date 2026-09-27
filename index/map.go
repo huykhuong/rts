@@ -155,7 +155,7 @@ func BuildMap(projectRoot string, symbols []Symbol) (*ProjectMap, error) {
 			return nil // unreadable subtree — see the doc comment
 		}
 		if d.IsDir() {
-			if skippedDirs[d.Name()] || strings.HasPrefix(d.Name(), ".") {
+			if skipDir(path, d.Name(), projectRoot) {
 				return filepath.SkipDir
 			}
 			return nil

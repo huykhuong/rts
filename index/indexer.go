@@ -43,7 +43,7 @@ func BuildIndex(projectRoot string) ([]Symbol, error) {
 
 		// Skip dirs we don't care about
 		if d.IsDir() {
-			if skippedDirs[d.Name()] {
+			if skipDir(path, d.Name(), projectRoot) {
 				return filepath.SkipDir
 			}
 			return nil
