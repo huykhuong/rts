@@ -1,0 +1,9 @@
+# Build output
+/rts
+/bin/
+
+# Per-machine Claude Code permissions
+.claude/settings.local.json
+
+# RTS's own index output, if `rts index` is ever run in this repo
+.rts/
