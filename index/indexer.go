@@ -6,14 +6,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
 type IndexFile struct {
-	Version	int `json:"version"`
-	GeneratedAt time.Time	`json:"generated_at"`
-	Symbols	[]Symbol	`json:"symbols"`
+	Version     int       `json:"version"`
+	GeneratedAt time.Time `json:"generated_at"`
+	Symbols     []Symbol  `json:"symbols"`
 }
 
 var skippedDirs = map[string]bool{
@@ -50,18 +49,12 @@ func BuildIndex(projectRoot string) ([]Symbol, error) {
 			return nil
 		}
 
-		if !strings.HasSuffix(path, ".rb") {
+		if !shouldIndex(path) {
 			return nil
 		}
 
-		for _, suffix := range skippedPathSuffixes {
-			if strings.Contains(path, suffix) {
-				return nil
-			}
-		}
-
 		// Skip + parse, any error is logged and skipped
-		source, err := os. ReadFile(path)
+		source, err := os.ReadFile(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[rts index] skipping %s: %v\n", path, err)
 			return nil
@@ -96,9 +89,9 @@ func Write(projectRoot string, symbols []Symbol) error {
 	}
 
 	indexFile := IndexFile{
-		Version: 1,
+		Version:     1,
 		GeneratedAt: time.Now().UTC(),
-		Symbols: symbols,
+		Symbols:     symbols,
 	}
 
 	data, err := json.MarshalIndent(indexFile, "", "  ")

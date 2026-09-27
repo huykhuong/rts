@@ -78,9 +78,11 @@ func TestHandleToolsCall_KillSwitchDisablesEveryTool(t *testing.T) {
 				handleToolsCall(
 					toolCall(t, name, map[string]interface{}{"path": "app/models/user.rb"}),
 					json.RawMessage("1"),
+					t.TempDir(),
+					"test-session",
 					NewFileCache(),
 					NewIndexCache("."),
-					NewEventLogger("test-session"),
+					NewEventLogger("test-session", t.TempDir()),
 				)
 			})
 
@@ -110,9 +112,11 @@ func TestHandleToolsCall_KillSwitchOffDispatchesNormally(t *testing.T) {
 		handleToolsCall(
 			toolCall(t, "definitely_not_a_tool", map[string]interface{}{}),
 			json.RawMessage("1"),
+			t.TempDir(),
+			"test-session",
 			NewFileCache(),
 			NewIndexCache("."),
-			NewEventLogger("test-session"),
+			NewEventLogger("test-session", t.TempDir()),
 		)
 	})
 

@@ -34,7 +34,7 @@ func Start(buildTime string) {
 
 	// Create a new session
 	sessionID := generateSessionID()
-	logger := NewEventLogger(sessionID)
+	logger := NewEventLogger(sessionID, cwd)
 
 	for {
 		// 1. Read incoming message line from Claude
@@ -56,7 +56,7 @@ func Start(buildTime string) {
 		case "tools/list":
 			handleToolsList(msg.ID)
 		case "tools/call":
-			handleToolsCall(line, msg.ID, cache, indexCache, logger)
+			handleToolsCall(line, msg.ID, cwd, sessionID, cache, indexCache, logger)
 		}
 	}
 }
@@ -136,61 +136,108 @@ func handleToolsList(id json.RawMessage) {
 
 	statsTool := Tool{
 		Name:        "get_stats",
-    Description: "Return a summary of RTS's token savings for the current Claude Code session. Shows how many chars/tokens were saved by using view_bionic_skeleton, view_bionic_method, view_file, and find_symbol vs the naive alternative of reading full files via native Read. Use this when the user asks 'how much did RTS save me' or when you want to self-report the value RTS is providing during a task.",
+		Description: "Return a summary of RTS's token savings for the current Claude Code session. Shows how many chars/tokens were saved by using view_bionic_skeleton, view_bionic_method, view_file, and find_symbol vs the naive alternative of reading full files via native Read. Use this when the user asks 'how much did RTS save me' or when you want to self-report the value RTS is providing during a task.",
 		InputSchema: InputSchema{
-			Type: "object",
+			Type:       "object",
 			Properties: map[string]Property{},
-			Required: []string{},
+			Required:   []string{},
 		},
 	}
 
 	searchTool := Tool{
-    Name:        "search_text",
-    Description: "Cross-file text search across the project (like `grep -rn` but bounded and RTS-native). Use this INSTEAD of Bash `grep`/`rg` for finding usages, arbitrary strings, method call sites, config keywords, or any text pattern that isn't a Ruby symbol definition. For finding where a symbol is DEFINED (class/method/constant), use find_symbol instead — it's faster and free of noise. Uses ripgrep under the hood, respects .gitignore, and skips vendor/tmp/log directories.",
-    InputSchema: InputSchema{
-        Type: "object",
-        Properties: map[string]Property{
-            "pattern": {
-                Type:        "string",
-                Description: "The text or regex pattern to search for. Case-sensitive.",
-            },
-            "path": {
-                Type:        "string",
-                Description: "Optional. Subdirectory to limit the search to (e.g., 'app/controllers'). Defaults to the project root.",
-            },
-            "file_glob": {
-                Type:        "string",
-                Description: "Optional. Restrict to files matching this glob (e.g., '*.rb', '*_test.rb', '*.yml').",
-            },
-        },
-        Required: []string{"pattern"},
-    },
+		Name:        "search_text",
+		Description: "Cross-file text search across the project (like `grep -rn` but bounded and RTS-native). Use this INSTEAD of Bash `grep`/`rg` for finding usages, arbitrary strings, method call sites, config keywords, or any text pattern that isn't a Ruby symbol definition. For finding where a symbol is DEFINED (class/method/constant), use find_symbol instead — it's faster and free of noise. Uses ripgrep under the hood, respects .gitignore, and skips vendor/tmp/log directories.",
+		InputSchema: InputSchema{
+			Type: "object",
+			Properties: map[string]Property{
+				"pattern": {
+					Type:        "string",
+					Description: "The text or regex pattern to search for. Case-sensitive.",
+				},
+				"path": {
+					Type:        "string",
+					Description: "Optional. Subdirectory to limit the search to (e.g., 'app/controllers'). Defaults to the project root.",
+				},
+				"file_glob": {
+					Type:        "string",
+					Description: "Optional. Restrict to files matching this glob (e.g., '*.rb', '*_test.rb', '*.yml').",
+				},
+			},
+			Required: []string{"pattern"},
+		},
 	}
 
 	listTool := Tool{
-    Name:        "list_directory",
-    Description: "List the contents of a directory as a tree, with line counts on each file. Use this INSTEAD of Bash `ls`/`find` to explore project structure or locate where a file lives. Line counts help you pick the right follow-up tool: large files → view_bionic_skeleton, small files → view_file. Skips noise directories (.git, node_modules, vendor, tmp, log). Bounded depth to keep output manageable.",
-    InputSchema: InputSchema{
+		Name:        "list_directory",
+		Description: "List the contents of a directory as a tree, with line counts on each file. Use this INSTEAD of Bash `ls`/`find` to explore project structure or locate where a file lives. Line counts help you pick the right follow-up tool: large files → view_bionic_skeleton, small files → view_file. Skips noise directories (.git, node_modules, vendor, tmp, log). Bounded depth to keep output manageable.",
+		InputSchema: InputSchema{
 			Type: "object",
 			Properties: map[string]Property{
-					"path": {
-							Type:        "string",
-							Description: "Optional. The directory to list (e.g., 'app/controllers/projects'). Defaults to the project root.",
-					},
-					"depth": {
-							Type:        "integer",
-							Description: "Optional. How many levels deep to list (1 = immediate contents only). Defaults to 2, capped at 4.",
-					},
+				"path": {
+					Type:        "string",
+					Description: "Optional. The directory to list (e.g., 'app/controllers/projects'). Defaults to the project root.",
+				},
+				"depth": {
+					Type:        "integer",
+					Description: "Optional. How many levels deep to list (1 = immediate contents only). Defaults to 2, capped at 4.",
+				},
 			},
 			Required: []string{},
-    },
+		},
+	}
+
+	projectMapTool := Tool{
+		Name:        "project_map",
+		Description: "Orient yourself in this codebase without exploring it. Returns the derived project map — what kind of project this is, where the code lives, the files past sessions reached for most, the files too large to read whole — plus any findings earlier sessions recorded about this repo. Call this FIRST in a session that needs to understand the project, before list_directory or exploratory reads: it is the map, and every other lookup is easier once you know what exists. Takes no arguments. Requires `rts index` to have been run.",
+		InputSchema: InputSchema{
+			Type:       "object",
+			Properties: map[string]Property{},
+			Required:   []string{},
+		},
+	}
+
+	recordInsightTool := Tool{
+		Name: "record_insight",
+		Description: "Write a finding about this codebase back into RTS, so the NEXT Claude Code session starts already knowing it instead of rediscovering it. " +
+			"Use it when the user tells you to note, remember or flag something about the project, and when you have worked out something durable and non-obvious that cost you real exploration — an architectural decision and its reason, a convention the code follows but never states, a gotcha, where a surprising responsibility actually lives. " +
+			"Do NOT record unprompted trivia, anything already obvious from a file's name or structure, anything specific to the current task, or a restatement of what the code plainly says — find_symbol already answers that, and a store full of noise is worse than an empty one. " +
+			"This stores a note, not a verified fact: it is always presented to future sessions as somebody's conclusion, to be checked rather than cited. If you find an existing finding is wrong, correct it by recording the right one with `supersedes` set to its id, rather than adding a second contradictory note. " +
+			"Say in one line what you recorded, after you record it.",
+		InputSchema: InputSchema{
+			Type: "object",
+			Properties: map[string]Property{
+				"title": {
+					Type:        "string",
+					Description: "One line naming the finding, specific enough to be useful in a list (e.g. 'Phase pipeline is convergent, not batched').",
+				},
+				"body": {
+					Type:        "string",
+					Description: "The finding itself: what it is, and what it rests on. Write it for a session that has none of your current context.",
+				},
+				"paths": {
+					Type:        "array",
+					Description: "Optional. Project-relative file paths the finding rests on. A finding whose files are all later deleted is dropped automatically, so linking it is what keeps the store from rotting.",
+					Items:       &PropertyItems{Type: "string"},
+				},
+				"symbols": {
+					Type:        "array",
+					Description: "Optional. Symbol names the finding concerns (e.g. ['Project::DataLayerManager', 'advance!']), so a future session can jump straight to them with find_symbol.",
+					Items:       &PropertyItems{Type: "string"},
+				},
+				"supersedes": {
+					Type:        "string",
+					Description: "Optional. The id of an existing finding this one replaces (e.g. 'i7'). The old one is removed in the same write.",
+				},
+			},
+			Required: []string{"title", "body"},
+		},
 	}
 
 	response := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      id,
 		"result": map[string]interface{}{
-			"tools": []Tool{skeletonTool, methodTool, fileTool, findSymbolTool, statsTool, searchTool, listTool},
+			"tools": []Tool{projectMapTool, skeletonTool, methodTool, fileTool, findSymbolTool, recordInsightTool, statsTool, searchTool, listTool},
 		},
 	}
 
@@ -199,7 +246,7 @@ func handleToolsList(id json.RawMessage) {
 }
 
 // handleToolsCall executes our Go skeletonizer logic and streams the text back to Claude.
-func handleToolsCall(rawRequest []byte, id json.RawMessage, cache *FileCache, indexCache *IndexCache, logger *EventLogger) {
+func handleToolsCall(rawRequest []byte, id json.RawMessage, root string, session string, cache *FileCache, indexCache *IndexCache, logger *EventLogger) {
 	// Use RawMessage for arguments so we can decode heterogeneous field types
 	// (string for "path", []string for "method_names").
 	var callReq struct {
@@ -230,6 +277,19 @@ func handleToolsCall(rawRequest []byte, id json.RawMessage, cache *FileCache, in
 		return
 	}
 
+	// The knowledge tools are routed first because neither takes a path, and
+	// the path-taking branch below treats a missing "path" argument as an
+	// error rather than as "this tool doesn't need one".
+	if callReq.Params.Name == "project_map" {
+		handleProjectMap(id, root, logger)
+		return
+	}
+
+	if callReq.Params.Name == "record_insight" {
+		handleRecordInsight(callReq.Params.Arguments, id, root, session, logger)
+		return
+	}
+
 	// We will try to do find_symbol first so Claude Code doesn't open a file it doesnt need
 	if callReq.Params.Name == "find_symbol" {
 		handleFindSymbol(callReq.Params.Arguments, id, indexCache, logger)
@@ -243,7 +303,7 @@ func handleToolsCall(rawRequest []byte, id json.RawMessage, cache *FileCache, in
 
 	if callReq.Params.Name == "search_text" {
 		handleSearchText(callReq.Params.Arguments, id, logger)
-    return
+		return
 	}
 
 	if callReq.Params.Name == "list_directory" {
@@ -275,10 +335,10 @@ func handleToolsCall(rawRequest []byte, id json.RawMessage, cache *FileCache, in
 		resultText = buf.String()
 
 		logger.Log(Event{
-			Tool: "view_bionic_skeleton",
-			Path: filePath,
+			Tool:          "view_bionic_skeleton",
+			Path:          filePath,
 			ResponseChars: len(resultText),
-			NaiveChars: len(data),
+			NaiveChars:    len(data),
 		})
 
 	case "view_bionic_method":
@@ -298,7 +358,7 @@ func handleToolsCall(rawRequest []byte, id json.RawMessage, cache *FileCache, in
 			return
 		}
 		resultText = formatMethodResults(methodNames, results, data)
-		
+
 		logger.Log(Event{
 			Tool:          "view_bionic_method",
 			Path:          filePath,
@@ -439,19 +499,19 @@ func handleFindSymbol(args map[string]json.RawMessage, id json.RawMessage, index
 	}
 
 	result := index.Find(idx, name)
-	resultText := formatSymbolMatches(name, result.Symbols, result.MatchKind)
+	resultText := formatSymbolMatches(name, result.Symbols, result.MatchKind, idx)
 
 	logger.Log(Event{
-		Tool: "find_symbol",
-		Name:	name,
-		Matches: len(result.Symbols),
+		Tool:          "find_symbol",
+		Name:          name,
+		Matches:       len(result.Symbols),
 		ResponseChars: len(resultText),
 	})
 
 	resp := ToolResponse{
 		JSONRPC: "2.0",
-		ID:				id,
-		Result: 	ToolResult{
+		ID:      id,
+		Result: ToolResult{
 			Content: []TextContent{{Type: "text", Text: resultText}},
 		},
 	}
@@ -463,15 +523,15 @@ func handleFindSymbol(args map[string]json.RawMessage, id json.RawMessage, index
 func handleGetStats(id json.RawMessage, logger *EventLogger) {
 	stats, err := ComputeStats(logger.session)
 	if err != nil {
-			sendError(id, fmt.Sprintf("Could not compute stats: %v", err))
-			return
+		sendError(id, fmt.Sprintf("Could not compute stats: %v", err))
+		return
 	}
 
 	resultText := formatStats(stats)
 
 	resp := ToolResponse{
 		JSONRPC: "2.0",
-		ID:	id,
+		ID:      id,
 		Result: ToolResult{
 			Content: []TextContent{{Type: "text", Text: resultText}},
 		},
@@ -494,10 +554,10 @@ func formatStats(stats *SessionStats) string {
 	}
 
 	// Approximate tokens: 4 chars per token is a rough industry heuristic
-  // for English + code. Directional, not exact.
+	// for English + code. Directional, not exact.
 
 	approxTokensSaved := stats.SavedChars / 4
-	
+
 	fmt.Fprintf(&buf, "  Calls               : %d\n", stats.Calls)
 	fmt.Fprintf(&buf, "  Response chars sent : %s\n", formatInt(stats.ResponseChars))
 	fmt.Fprintf(&buf, "  Naive chars (baseline): %s\n", formatInt(stats.NaiveChars))
@@ -507,7 +567,7 @@ func formatStats(stats *SessionStats) string {
 		percentage := float64(stats.SavedChars) / float64(stats.NaiveChars) * 100
 		fmt.Fprintf(&buf, " (%.0f%% of naive)", percentage)
 	}
-	
+
 	fmt.Fprintln(&buf)
 	fmt.Fprintf(&buf, " Approx tokens saved : %s\n", formatInt(approxTokensSaved))
 
@@ -529,26 +589,26 @@ func formatStats(stats *SessionStats) string {
 func formatInt(n int) string {
 	// Handle negatives cleanly.
 	if n < 0 {
-			return "-" + formatInt(-n)
+		return "-" + formatInt(-n)
 	}
 	s := fmt.Sprintf("%d", n)
 	// Insert commas every 3 digits from the right.
 	if len(s) <= 3 {
-			return s
+		return s
 	}
 	var out strings.Builder
 	lead := len(s) % 3
 	if lead > 0 {
-			out.WriteString(s[:lead])
-			if len(s) > lead {
-					out.WriteString(",")
-			}
+		out.WriteString(s[:lead])
+		if len(s) > lead {
+			out.WriteString(",")
+		}
 	}
 	for i := lead; i < len(s); i += 3 {
-			out.WriteString(s[i : i+3])
-			if i+3 < len(s) {
-					out.WriteString(",")
-			}
+		out.WriteString(s[i : i+3])
+		if i+3 < len(s) {
+			out.WriteString(",")
+		}
 	}
 	return out.String()
 }
@@ -565,39 +625,51 @@ func sortToolsByCalls(byTool map[string]ToolStats) []string {
 		}
 		return names[i] < names[j]
 	})
-	
+
 	return names
 }
 
 // formatSymbolMatches renders the matched symbols as human-readable text. Empty match list producrs
 // a clear not found message so Claude Code knows the lookup succeeded but returned nothing
-func formatSymbolMatches(name string, matches []index.Symbol, matchKind string) string {
+func formatSymbolMatches(name string, matches []index.Symbol, matchKind string, idx *index.IndexFile) string {
 	if len(matches) == 0 {
-		return fmt.Sprintf("No symbols named %q found in the index.\n"+
-			"If you recently added this symbol, run `rts index` to refresh.\n", name)
+		return formatSymbolMiss(name, idx)
 	}
 
 	var buf strings.Builder
+
+	// Lead with what was found, never with what was not.
+	//
+	// This read "No exact match for %q; found 4 symbol(s)..." and a real
+	// session took it for a failure — it had been handed four correct
+	// answers and went looking elsewhere, paying for follow-up calls it did
+	// not need. A namespace match IS the answer to "where is PdfRequester
+	// defined?"; the qualified names in the rows below already show the
+	// query was unqualified, so the header saying so too bought nothing and
+	// cost the result its credibility.
 	switch matchKind {
 	case "segment", "suffix":
-		fmt.Fprintf(&buf, "No exact match for %q; found %d symbol(s) by namespace match:\n",
-			name, len(matches))
+		fmt.Fprintf(&buf, "Found %d symbol(s) matching %q (qualified differently in the code):\n",
+			len(matches), name)
 	default:
 		fmt.Fprintf(&buf, "Found %d symbol(s) named %q:\n", len(matches), name)
 	}
 
 	for _, m := range matches {
+		// Render the name the way Ruby writes it, because this output gets
+		// read and copied. A nested class is Projects::Reports::Controller,
+		// never Projects::Reports.Controller — the separators were swapped
+		// here, so a class came out with a dot (not valid Ruby) and a class
+		// method came out with "::" (also wrong).
 		qualified := m.Name
 		if m.Container != "" {
 			switch m.Kind {
 			case "method":
-				qualified = m.Container + "#" + m.Name
-			case "class":
-				qualified = m.Container + "." + m.Name
-			case "scope":
-				qualified = m.Container + "." + m.Name
+				qualified = m.Container + "#" + m.Name // User#full_name
+			case "class_method", "scope":
+				qualified = m.Container + "." + m.Name // User.active
 			default:
-				qualified = m.Container + "::" + m.Name
+				qualified = m.Container + "::" + m.Name // Report::PdfRequester
 			}
 		}
 		fmt.Fprintf(&buf, "  %-13s %-40s %s:%d\n", m.Kind, qualified, m.Path, m.Line)
@@ -606,12 +678,122 @@ func formatSymbolMatches(name string, matches []index.Symbol, matchKind string) 
 	return buf.String()
 }
 
-func generateSessionID() string{
-	now := time.Now()	.UTC()
+// formatSymbolMiss answers a lookup that found nothing, and tries to answer
+// the question behind it rather than just reporting the gap.
+//
+// The old message blamed staleness on every miss — "if you recently added
+// this symbol, run rts index". A real session searched for
+// Projects::Reports::PdfDownloadsController, which does not exist under that
+// name and never did: the class is ClientPortal::PdfDownloadsController. It
+// was told to reindex, which would not have helped, instead of being shown
+// the near-miss that would have.
+//
+// So near-misses come first, drawn from the names actually in the index — the
+// same "did you mean" view_bionic_method has offered all along, which was
+// simply never wired to the symbol lookup. Staleness is mentioned last, and
+// only as one possibility among two.
+func formatSymbolMiss(name string, idx *index.IndexFile) string {
+	var buf strings.Builder
+	fmt.Fprintf(&buf, "No symbols named %q found in the index.\n", name)
+
+	// Only a genuinely close name is offered. SuggestNames also returns a
+	// consolation list when nothing resembles the query, and a confident
+	// "did you mean: User?" in answer to a lookup for something unrelated is
+	// worse than admitting the miss — it invites a second wrong call.
+	if suggestions, close := suggestSymbols(name, idx); close && len(suggestions) > 0 {
+		fmt.Fprintf(&buf, "Did you mean: %s?\n", strings.Join(suggestions, ", "))
+		return buf.String()
+	}
+
+	buf.WriteString("Nothing similar in the index either — check the spelling, " +
+		"or run `rts index` if this symbol was added since the last one.\n")
+	return buf.String()
+}
+
+// maxSymbolSuggestions bounds the near-miss list. Enough to correct a wrong
+// namespace or a typo, short enough not to read as a result set.
+const maxSymbolSuggestions = 6
+
+// suggestSymbols finds names close to the query.
+//
+// The query's last "::" segment is what gets matched, because a wrong guess
+// is usually a wrong namespace around a right class name — which is exactly
+// the Projects::Reports::PdfDownloadsController case. Suggestions come back
+// fully qualified so the correction is visible: you asked for
+// Projects::Reports::X, the code has ClientPortal::X.
+// The bool reports whether the suggestions are actually close, mirroring
+// tool.SuggestNames — see formatSymbolMiss for why the distinction matters.
+func suggestSymbols(name string, idx *index.IndexFile) ([]string, bool) {
+	if idx == nil {
+		return nil, false
+	}
+
+	needle := name
+	if i := strings.LastIndex(needle, "::"); i >= 0 {
+		needle = needle[i+2:]
+	}
+
+	// Bare names are what SuggestNames compares; the qualified forms are what
+	// gets shown, so both are collected in one pass.
+	qualified := map[string][]string{}
+	bare := make([]string, 0, len(idx.Symbols))
+	seen := map[string]bool{}
+
+	for _, sym := range idx.Symbols {
+		if !seen[sym.Name] {
+			seen[sym.Name] = true
+			bare = append(bare, sym.Name)
+		}
+		full := sym.Name
+		if sym.Container != "" {
+			full = sym.Container + "::" + sym.Name
+		}
+		qualified[sym.Name] = appendUnique(qualified[sym.Name], full)
+	}
+
+	// The exact-segment case first, and it is the important one: the query
+	// named a real class under a namespace that does not exist. Find cannot
+	// answer it — its tiers compare against the whole query string — and
+	// tool.SuggestNames deliberately skips exact matches, because in method
+	// extraction an exact match would already have been found. Here it is
+	// the answer, so it is handled before the fuzzy pass rather than lost
+	// between the two.
+	if exact := qualified[needle]; len(exact) > 0 {
+		if len(exact) > maxSymbolSuggestions {
+			exact = exact[:maxSymbolSuggestions]
+		}
+		return exact, true
+	}
+
+	candidates, close := tool.SuggestNames(needle, bare)
+
+	var out []string
+	for _, c := range candidates {
+		for _, full := range qualified[c] {
+			out = append(out, full)
+			if len(out) == maxSymbolSuggestions {
+				return out, close
+			}
+		}
+	}
+	return out, close
+}
+
+func appendUnique(list []string, value string) []string {
+	for _, existing := range list {
+		if existing == value {
+			return list
+		}
+	}
+	return append(list, value)
+}
+
+func generateSessionID() string {
+	now := time.Now().UTC()
 	buf := make([]byte, 2)
 	_, _ = rand.Read(buf)
 	return fmt.Sprintf("session-%s-%s",
-        now.Format("20060102-150405"),
-        hex.EncodeToString(buf),
-    )
+		now.Format("20060102-150405"),
+		hex.EncodeToString(buf),
+	)
 }

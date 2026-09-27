@@ -28,8 +28,8 @@ func Load(projectRoot string) (*IndexFile, error) {
 }
 
 type FindResult struct {
-	Symbols			[]Symbol
-	MatchKind		string // "Exact, "segment" or "suffix"
+	Symbols   []Symbol
+	MatchKind string // "Exact, "segment" or "suffix"
 }
 
 // Find looks up symbols by name using progressively looser matching.
@@ -38,17 +38,28 @@ type FindResult struct {
 //
 //  1. exact   — sym.Name == query (normal case: "calculate_metrics", "User")
 //  2. segment — the last "::" segment of the symbol's qualified name == query
-//               (handles both `class ReportPage::PageFinder` [Case B] and
-//                nested `class PageFinder` inside `ReportPage` [Case A] when
-//                searching for "PageFinder")
+//     (handles both `class ReportPage::PageFinder` [Case B] and
+//     nested `class PageFinder` inside `ReportPage` [Case A] when
+//     searching for "PageFinder")
 //  3. suffix  — qualified name ends with "::query" (handles multi-segment
-//               queries like "Report::PageFinder")
+//     queries like "Report::PageFinder")
 //
 // If nothing matches at any tier, returns an empty result.
 func Find(idx *IndexFile, name string) FindResult {
 	var exact []Symbol
 	for _, sym := range idx.Symbols {
-		if sym.Name == name {
+		// Either spelling counts as exact: the bare name a lookup usually
+		// uses, or the fully-qualified one.
+		//
+		// The qualified case was missing, and it made the most confident
+		// possible query fail. Searching "Projects::Reports::PdfDownloads\
+		// Controller" — the class's real, complete name — matched nothing:
+		// tier 1 compared it against the bare name, tier 2 against the last
+		// segment, and tier 3 wanted the qualified name to end with
+		// "::" + the query, which a name that IS the query does not. So
+		// knowing exactly what you were looking for was the one way to be
+		// told it did not exist.
+		if sym.Name == name || qualifiedName(sym) == name {
 			exact = append(exact, sym)
 		}
 	}

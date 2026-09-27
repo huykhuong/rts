@@ -309,7 +309,8 @@ func TestCollect_CoversEveryCheck(t *testing.T) {
 	// or silently dropped.
 	got := collect("unknown", t.TempDir(), t.TempDir(), fixedNow)
 
-	want := []string{"build", "kill switch", "ripgrep", "symbol index", "event log", "~/.rts dir"}
+	want := []string{"build", "kill switch", "ripgrep", "symbol index", "project map",
+		"findings", "event log", "~/.rts dir"}
 	if len(got) != len(want) {
 		t.Fatalf("collect returned %d checks, want %d", len(got), len(want))
 	}

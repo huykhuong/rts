@@ -84,6 +84,149 @@ Being specific here is more useful than being encouraging.
 
 ---
 
+## Cross-session memory
+
+Every tool above makes one read cheaper. None of them addressed the cost that
+is not paid inside a session at all: **a new session knows nothing about the
+codebase, so it re-derives the same orientation the last one did, and throws
+it away again at the end.** Cheaper reads make that rediscovery cheaper. They
+do not make it stop happening.
+
+Three stores under `.rts/` now do, and the line between them is the whole
+design:
+
+| Store | What it is | Rebuildable? |
+|---|---|---|
+| `symbols.json` | Every definition in the project | Yes — `rts index` |
+| `map.json` | The derived map: project kind, layout, entry points, most-read files, files too big to read whole | Yes — `rts index` |
+| `insights.json` | Findings a session concluded and wrote down | **No** |
+
+The first two are *derived*: regenerated wholesale, always true of the code as
+it stands, safe to delete. The third is not. It holds conclusions, which can
+be wrong and can go stale the moment the code under them changes.
+
+**They are kept in separate stores, and every read labels which one it is
+handing back.** Merging them would have been less code and would have turned
+RTS from a code lens into a confident liar — a past session's guess, read back
+by the next one as a fact about the codebase, with a tool's authority behind
+it. The brief says so in as many words: *these are notes, NOT verified facts.*
+
+Two mechanisms carry them into a session:
+
+- **A `SessionStart` hook** emits the map, the findings, and — only when there
+  is drift — a staleness warning, as `additionalContext`. Not as a system
+  prompt: static instructions stay byte-identical across sessions so they keep
+  being cached, and only the part that genuinely differs per project and per
+  day is paid for. A `resume` is skipped, because the transcript already
+  carries the brief; a `compact` is not, because the surviving summary
+  routinely drops it.
+- **A `project_map` tool** returns the same text on demand. It exists as well
+  as the hook because the hook cannot reach Claude Code's built-in Explore and
+  Plan subagents (see below) — and a subagent is precisely the context that
+  opens knowing nothing.
+
+`record_insight` is the one write in an otherwise read-only server. Its
+description gates it hard: not unprompted trivia, not anything obvious from a
+file's structure, not anything specific to the current task. A store full of
+noise is worse than an empty one.
+
+### What keeps it from rotting
+
+A memory that only accumulates is a memory that ends up wrong. Four things
+push back, and none of them require anybody to remember to tidy up:
+
+- **Dead links drop out.** A finding names the files it rests on. When every
+  one of them is gone, the finding stops being shown — it can only mislead the
+  session that reads it. A finding that named three files and has one left
+  survives with the surviving link.
+- **Corrections replace rather than accumulate.** `record_insight` takes a
+  `supersedes` id, so a wrong note is removed in the same write that fixes it,
+  instead of sitting there arguing with its replacement.
+- **There is a ceiling.** Sixty findings, oldest evicted first. A memory with
+  no eviction is a context tax that grows forever.
+- **A person can delete one.** `rts insights rm <id>`, without having to ask a
+  model to do it.
+
+### What it does not do
+
+- **Nothing generates the findings automatically.** Bionic's data layer — the
+  system this design is taken from — runs a paid extraction model over every
+  document to produce its graph. RTS is a zero-dependency Go binary with a
+  heuristic line parser and no network, and it never will do that. The map is
+  derived structurally; the findings are written by whichever Claude session
+  bothers to write one. An unused `record_insight` means an empty store.
+- **Staleness is detected by content hash, after mtime proved unusable.** The
+  first version compared modification times. Measured on a working Rails repo
+  an hour after a rebase: **493 Ruby files reported changed, 492 of them
+  byte-identical to HEAD.** Every git operation that rewrites the working tree
+  — rebase, checkout, branch switch, stash pop — restamps mtimes wholesale, so
+  the warning fired at full volume on days nothing had changed. A session that
+  read it learned to distrust the map, and the one file that had genuinely
+  moved was buried under 492 that had not.
+
+  `rts index` now fingerprints every indexed file (FNV-64a, in
+  `.rts/fingerprints.json`) and the check compares content. mtime survives as
+  a pre-filter only — a file whose mtime has not moved cannot have changed, so
+  it is never read — which keeps the walk fast while making the answer true.
+  Deletions became visible in the same change: a path in the fingerprints with
+  nothing on disk is a deletion, which the mtime check structurally could not
+  see.
+- **The "most-read files" list starts empty on an existing install.** It is
+  counted from `~/.rts/events.jsonl`, which is one global file for every
+  project on this machine — and relative paths are not unique across repos, so
+  two Rails apps both hold `config/application.rb`. Events now carry the
+  project root they were logged under and are counted only against it. Events
+  written before that do not, and are skipped rather than guessed at: a wrong
+  list of hot files is worse than no list, and the section omits itself when
+  it has nothing.
+- **The "largest files" list excludes tests, on purpose.** Measured on a real
+  Rails app, the ten largest Ruby files were eight test files — a session
+  orienting itself was handed `parse_job_test.rb` and never saw `project.rb`
+  or `content_element.rb` at all. A test file is something you open because
+  the task took you there, not something you orient on. They stay in the
+  layout table, where knowing the suite is large is worth something.
+- **The map describes a Ruby project.** `rts index` parses `.rb` only. In a Go
+  or Node repo the map still reports layout, entry points and large files, and
+  the brief stops advertising the Ruby-only tools — but the symbol counts that
+  rank everything will be zero.
+
+### What a real session found, and what it cost
+
+The first outside review of this feature ran on a live Rails repo and reported
+two failures. Both were real; neither was quite what it looked like. Chasing
+them turned up four separate defects, three of them older than the memory
+feature itself:
+
+1. **The staleness warning cried wolf** — 492 phantom changed files after a
+   rebase. Fixed above; this is the one the review correctly identified.
+2. **`find_symbol` reported its successes as failures.** A namespace match
+   printed `No exact match for "PdfRequester"; found 4 symbol(s)…`. It had
+   found four correct answers; the session read the first three words, treated
+   it as a miss, and paid for follow-up calls. Now it leads with the find.
+3. **`find_symbol` offered no near-misses on a true miss**, and blamed
+   staleness for every one. A lookup for `Projects::Reports::PdfDownloads\
+   Controller` was told to re-index, which would not have helped. The "did you
+   mean" machinery `view_bionic_method` has always had was simply never wired
+   to the symbol lookup. It is now, and re-indexing is mentioned last.
+4. **A fully-qualified lookup could not match.** `Find`'s tiers compared the
+   query against the bare name, the last segment, and `"::"+query` as a
+   suffix — so a name that *was* the query matched nothing. **Searching for a
+   class by its complete, correct name was the one way to be told it did not
+   exist.** Found only because the new suggestion code started replying "did
+   you mean" with the exact string that had just been searched for.
+
+A fifth, cosmetic but wrong: qualified names rendered a nested class with a
+dot (`Projects::Reports.Controller`), which is not valid Ruby, while class
+methods rendered with `::`. The two separators were swapped.
+
+One claim in that review needs correcting, because it fed the wrong diagnosis:
+`find_symbol` was reported as having "saved literally nothing — 6 calls, 0
+chars". It logs no baseline (see the instrumentation note above), so its
+savings are **absent from the measurement, not measured as zero.** The misses
+were real; the zero was an artifact.
+
+---
+
 ## Known limitations
 
 ### Small files carry a small net cost
@@ -169,3 +312,13 @@ everything RTS *does* optimize.
 Compressing or summarizing command output is the most promising unexplored
 direction for this tool. Everything on the file-reading side is incremental
 tuning by comparison.
+
+The second-largest cost was **rediscovery across sessions**, and that one is
+now addressed — see *Cross-session memory* above. It is worth saying what is
+still unmeasured about it: the savings from a session that starts oriented are
+real but **not instrumented**. `get_stats` reports chars saved against a naive
+full read, and there is no honest baseline for "the exploration this session
+did not have to do." Do not quote a number for it. The claim RTS can defend is
+narrower and still worth making: the orientation now costs a few hundred
+tokens of injected context, once, instead of a directory walk and several
+exploratory reads, every time.

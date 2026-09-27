@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"rts/index"
+	"rts/insight"
 	"rts/tool"
 )
 
@@ -71,6 +72,8 @@ func collect(buildTime, projectRoot, home string, now time.Time) []check {
 		checkKillSwitch(),
 		checkRipgrep(),
 		checkIndex(projectRoot, now),
+		checkMap(projectRoot, now),
+		checkInsights(projectRoot),
 		checkLog(home),
 		checkRTSDir(home),
 	}
@@ -149,6 +152,80 @@ func checkIndex(projectRoot string, now time.Time) check {
 		return check{"symbol index", statusWarn, detail + " — consider re-running `rts index`"}
 	}
 	return check{"symbol index", statusPass, detail}
+}
+
+// checkMap inspects .rts/map.json — the derived orientation a session opens
+// with — and, more usefully, how far the code has moved since it was built.
+//
+// Drift is the failure this check exists for. A missing map announces itself
+// the moment anyone looks at a session; a map that quietly describes last
+// month's codebase does not, and it is worse, because it is believed.
+func checkMap(projectRoot string, now time.Time) check {
+	path := filepath.Join(projectRoot, ".rts", "map.json")
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return check{"project map", statusWarn,
+			fmt.Sprintf("no map at %s — run `rts index` so sessions start oriented", path)}
+	}
+
+	pm, err := index.LoadMap(projectRoot)
+	if err != nil {
+		return check{"project map", statusFail, fmt.Sprintf("unreadable: %v", err)}
+	}
+
+	detail := fmt.Sprintf("%d symbols, %d files, built %s",
+		pm.Counts.Symbols, pm.Counts.Files, humanAge(now.Sub(pm.GeneratedAt)))
+
+	drift, err := index.CheckDrift(projectRoot)
+	if err != nil {
+		// No fingerprints beside the index means it was written by an older
+		// rts. Say so plainly rather than reporting a confident "fresh".
+		return check{"project map", statusWarn,
+			detail + " — no content fingerprints; re-run `rts index` to enable drift detection"}
+	}
+
+	if drift.Stale() {
+		return check{"project map", statusWarn,
+			fmt.Sprintf("%s — %s since; re-run `rts index`", detail, drift.Describe())}
+	}
+
+	// The touched count is the noise the old mtime check mistook for signal.
+	// Naming it explains an otherwise baffling absence of warnings right
+	// after a rebase.
+	if drift.Touched > 0 {
+		return check{"project map", statusPass,
+			fmt.Sprintf("%s — up to date (%d file(s) restamped by git, none changed)", detail, drift.Touched)}
+	}
+
+	return check{"project map", statusPass, detail}
+}
+
+// checkInsights reports the recorded findings.
+//
+// It is the one store under .rts that `rts index` cannot rebuild, so a parse
+// failure here is a FAIL rather than the WARN a missing derived file gets:
+// the fix is to recover the file, never to regenerate it.
+func checkInsights(projectRoot string) check {
+	path := insight.Path(projectRoot)
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return check{"findings", statusPass,
+			"none recorded yet — Claude writes them with record_insight"}
+	}
+
+	store, err := insight.Load(projectRoot)
+	if err != nil {
+		return check{"findings", statusFail, fmt.Sprintf("unreadable: %v", err)}
+	}
+
+	live := insight.Live(projectRoot, store)
+	detail := fmt.Sprintf("%s — %d recorded", path, len(store.Insights))
+
+	if dropped := len(store.Insights) - len(live); dropped > 0 {
+		detail += fmt.Sprintf(", %d hidden (every file they named is gone)", dropped)
+	}
+
+	return check{"findings", statusPass, detail}
 }
 
 // checkLog verifies ~/.rts/events.jsonl is appendable and counts the
