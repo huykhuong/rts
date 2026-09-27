@@ -19,23 +19,25 @@ func handleSearchText(args map[string]json.RawMessage, id json.RawMessage, logge
 	searchPath, _ := stringArg(args, "path")
 	fileGlob, _ := stringArg(args, "file_glob")
 
-	resultText, err := tool.SearchText(pattern, searchPath, fileGlob)
+	outcome, err := tool.SearchText(pattern, searchPath, fileGlob)
 	if err != nil {
 		sendError(id, fmt.Sprintf("Search failed: %v", err))
 		return
 	}
 
 	logger.Log(Event{
-		Tool: "search_text",
-		Name:	pattern,
-		ResponseChars: len(resultText),
+		Tool:          "search_text",
+		Name:          pattern,
+		Matches:       outcome.TotalMatches,
+		ResponseChars: len(outcome.Text),
+		NaiveChars:    outcome.NaiveChars,
 	})
 
 	resp := ToolResponse{
 		JSONRPC: "2.0",
-		ID:	id,
+		ID:      id,
 		Result: ToolResult{
-			Content: []TextContent{{Type: "text", Text: resultText}},
+			Content: []TextContent{{Type: "text", Text: outcome.Text}},
 		},
 	}
 
@@ -54,14 +56,14 @@ func HandleListDirectory(args map[string]json.RawMessage, id json.RawMessage, lo
 	}
 
 	logger.Log(Event{
-		Tool:		"list_directory",
-		Path:		dirPath,
+		Tool:          "list_directory",
+		Path:          dirPath,
 		ResponseChars: len(resultText),
 	})
-	
+
 	resp := ToolResponse{
 		JSONRPC: "2.0",
-		ID:	id,
+		ID:      id,
 		Result: ToolResult{
 			Content: []TextContent{{Type: "text", Text: resultText}},
 		},

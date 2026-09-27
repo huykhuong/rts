@@ -63,19 +63,36 @@ const (
 )
 // =============================================
 
+// SearchOutcome carries the formatted search output plus the measurement
+// data needed to log how much the output cap saved.
+//
+// NaiveChars is the counterfactual: what a plain Bash `grep` would have
+// dumped into context. Text is what we actually returned. On a narrow
+// search where nothing is truncated, Text is *larger* than NaiveChars
+// (we add a header), so the derived saving is slightly negative. That is
+// intended and honest — search_text costs a little on narrow queries and
+// wins large on broad ones, the same way view_file does on small files.
+type SearchOutcome struct {
+	Text         string // formatted output actually returned to Claude
+	NaiveChars   int    // byte length of raw rg/grep output, pre-formatting
+	TotalMatches int    // match count before line truncation
+	Truncated    bool   // whether the line cap kicked in
+}
+
 // ==================== NEW ====================
 // SearchText runs a cross-file text search for `pattern` starting at
 // `searchPath` (defaults to "." if empty), optionally restricted to
 // files matching `fileGlob` (e.g. "*.rb"). Returns the formatted
-// output ready to send back to Claude Code.
+// output ready to send back to Claude Code, plus the measurement data
+// describing what the output cap saved.
 //
 // Uses ripgrep (`rg`) if available; falls back to system `grep`.
 // Ripgrep is dramatically preferred — it respects .gitignore, skips
 // binary files automatically, and handles Unicode. `grep` is a
 // best-effort fallback so RTS works even without rg installed.
-func SearchText(pattern, searchPath, fileGlob string) (string, error) {
+func SearchText(pattern, searchPath, fileGlob string) (SearchOutcome, error) {
 	if pattern == "" {
-		return "", fmt.Errorf("pattern is required")
+		return SearchOutcome{}, fmt.Errorf("pattern is required")
 	}
 	if searchPath == "" {
 		searchPath = "."
@@ -89,11 +106,13 @@ func SearchText(pattern, searchPath, fileGlob string) (string, error) {
 
 	// Fallback path — note in the output that we're using grep so the
 	// user can see the tool would be more precise with ripgrep installed.
+	// The note lands in Text (Claude pays for it), not in NaiveChars.
 	out, err := runGrep(pattern, searchPath, fileGlob)
 	if err != nil {
 		return out, err
 	}
-	return "# note: ripgrep (rg) not found on PATH; used grep as fallback\n" + out, nil
+	out.Text = "# note: ripgrep (rg) not found on PATH; used grep as fallback\n" + out.Text
+	return out, nil
 }
 // =============================================
 
@@ -101,7 +120,16 @@ func SearchText(pattern, searchPath, fileGlob string) (string, error) {
 // runRipgrep invokes rg with defaults that mirror how a developer
 // would grep interactively: line numbers on, respects .gitignore,
 // skips known-uninteresting directories.
-func runRipgrep(rgPath, pattern, searchPath, fileGlob string) (string, error) {
+//
+// Measurement caveat: --max-count caps matches *per file* inside rg
+// itself, so the raw output we measure as NaiveChars is already capped
+// and understates a truly unbounded search. The cap stays — a
+// conservative bias can only understate savings, never overstate them,
+// and removing it risks pulling a very large output into memory. Note
+// that the grep fallback has no equivalent per-file cap, so its raw
+// output is genuinely complete; the two paths' NaiveChars are not
+// strictly comparable.
+func runRipgrep(rgPath, pattern, searchPath, fileGlob string) (SearchOutcome, error) {
 	args := []string{
 		"--line-number",
 		"--no-heading",   // don't group by file; one match per line
@@ -128,7 +156,7 @@ func runRipgrep(rgPath, pattern, searchPath, fileGlob string) (string, error) {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return formatEmpty(pattern), nil
 		}
-		return "", fmt.Errorf("ripgrep failed: %w", err)
+		return SearchOutcome{}, fmt.Errorf("ripgrep failed: %w", err)
 	}
 
 	return formatResults(pattern, string(output)), nil
@@ -138,7 +166,7 @@ func runRipgrep(rgPath, pattern, searchPath, fileGlob string) (string, error) {
 // ==================== NEW ====================
 // runGrep is the fallback when ripgrep isn't installed. Uses portable
 // grep flags that work on both macOS BSD grep and Linux GNU grep.
-func runGrep(pattern, searchPath, fileGlob string) (string, error) {
+func runGrep(pattern, searchPath, fileGlob string) (SearchOutcome, error) {
 	args := []string{
 		"-r",             // recursive
 		"-n",             // line numbers
@@ -163,7 +191,7 @@ func runGrep(pattern, searchPath, fileGlob string) (string, error) {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return formatEmpty(pattern), nil
 		}
-		return "", fmt.Errorf("grep failed: %w", err)
+		return SearchOutcome{}, fmt.Errorf("grep failed: %w", err)
 	}
 
 	return formatResults(pattern, string(output)), nil
@@ -174,7 +202,10 @@ func runGrep(pattern, searchPath, fileGlob string) (string, error) {
 // formatResults renders the raw rg/grep output as a bounded, headered
 // text block. Truncates at searchMaxLines and marks the truncation so
 // Claude Code can tell when to narrow its query.
-func formatResults(pattern, raw string) string {
+//
+// NaiveChars is len(raw) — the untouched bytes the underlying search
+// produced, measured before any formatting or truncation.
+func formatResults(pattern, raw string) SearchOutcome {
 	lines := strings.Split(strings.TrimRight(raw, "\n"), "\n")
 	total := len(lines)
 
@@ -194,14 +225,25 @@ func formatResults(pattern, raw string) string {
 		fmt.Fprintf(&buf, "# ... truncated to %d of %d lines — narrow the pattern or use file_glob to reduce results\n",
 			searchMaxLines, total)
 	}
-	return buf.String()
+	return SearchOutcome{
+		Text:         buf.String(),
+		NaiveChars:   len(raw),
+		TotalMatches: total,
+		Truncated:    truncated,
+	}
 }
 // =============================================
 
 // ==================== NEW ====================
 // formatEmpty is the "no matches found" response — same header shape
 // so Claude Code sees consistent output regardless of match count.
-func formatEmpty(pattern string) string {
-	return fmt.Sprintf("# search: %q — 0 match(es)\n", pattern)
+//
+// NaiveChars stays 0: nothing matched, so there is no baseline to
+// compare against. The logger only derives saved_chars when
+// NaiveChars > 0, so a zero-match search reports no savings either way.
+func formatEmpty(pattern string) SearchOutcome {
+	return SearchOutcome{
+		Text: fmt.Sprintf("# search: %q — 0 match(es)\n", pattern),
+	}
 }
 // =============================================
