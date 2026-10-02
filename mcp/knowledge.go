@@ -163,5 +163,5 @@ func sendText(id json.RawMessage, text string) {
 	}
 
 	out, _ := json.Marshal(resp)
-	fmt.Println(string(out))
+	writeLine(string(out))
 }

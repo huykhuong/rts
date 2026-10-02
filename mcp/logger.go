@@ -102,5 +102,7 @@ func (l *EventLogger) Log(ev Event) {
 		return
 	}
 
-	_, _ = f.Write(append(line, '\n'))
+	// The log is a plain file on disk, so it gets the same scrubbing as the
+	// MCP output: a search pattern or path is never written with a key in it.
+	_, _ = f.Write(append([]byte(redactor.Redact(string(line))), '\n'))
 }

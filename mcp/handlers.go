@@ -3,6 +3,9 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+
+	"rts/secrets"
 	"rts/tool"
 )
 
@@ -13,6 +16,14 @@ func handleSearchText(args map[string]json.RawMessage, id json.RawMessage, logge
 	pattern, err := stringArg(args, "pattern")
 	if err != nil {
 		sendError(id, err.Error())
+		return
+	}
+
+	// The request was scrubbed on the way in, so a pattern that held a key
+	// value now holds the placeholder — which, read as a regex, would match
+	// unrelated lines. Searching for a key's value is refused outright.
+	if strings.Contains(pattern, secrets.Redacted) {
+		sendError(id, "Refused: the search pattern contains a protected secret value.")
 		return
 	}
 
@@ -42,7 +53,7 @@ func handleSearchText(args map[string]json.RawMessage, id json.RawMessage, logge
 	}
 
 	out, _ := json.Marshal(resp)
-	fmt.Println(string(out))
+	writeLine(string(out))
 }
 
 func HandleListDirectory(args map[string]json.RawMessage, id json.RawMessage, logger *EventLogger) {
@@ -70,7 +81,7 @@ func HandleListDirectory(args map[string]json.RawMessage, id json.RawMessage, lo
 	}
 
 	out, _ := json.Marshal(resp)
-	fmt.Println(string(out))
+	writeLine(string(out))
 }
 
 func intArg(args map[string]json.RawMessage, key string) (int, error) {

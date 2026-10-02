@@ -12,7 +12,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
+
+	"rts/secrets"
 )
 
 // ==================== NEW ====================
@@ -97,6 +100,9 @@ func SearchText(pattern, searchPath, fileGlob string) (SearchOutcome, error) {
 	if searchPath == "" {
 		searchPath = "."
 	}
+	if secrets.IsProtected(searchPath) {
+		return SearchOutcome{}, fmt.Errorf("%s", secrets.Refusal(searchPath))
+	}
 
 	// Prefer ripgrep. findRipgrep checks PATH plus common install
 	// locations — that's our signal to try grep only if rg is truly absent.
@@ -145,6 +151,12 @@ func runRipgrep(rgPath, pattern, searchPath, fileGlob string) (SearchOutcome, er
 	if fileGlob != "" {
 		args = append(args, "--glob="+fileGlob)
 	}
+	// After the caller's glob on purpose: rg lets the later glob win, so a
+	// file_glob of "*.key" or "master.key" cannot pull a key back in. An
+	// rg glob otherwise overrides .gitignore, which is how it got through.
+	for _, g := range secrets.SearchExcludes {
+		args = append(args, "--iglob=!"+g)
+	}
 	args = append(args, "--", pattern, searchPath)
 
 	cmd := exec.Command(rgPath, args...)
@@ -159,7 +171,7 @@ func runRipgrep(rgPath, pattern, searchPath, fileGlob string) (SearchOutcome, er
 		return SearchOutcome{}, fmt.Errorf("ripgrep failed: %w", err)
 	}
 
-	return formatResults(pattern, string(output)), nil
+	return formatKept(pattern, string(output)), nil
 }
 // =============================================
 
@@ -181,6 +193,11 @@ func runGrep(pattern, searchPath, fileGlob string) (SearchOutcome, error) {
 	if fileGlob != "" {
 		args = append(args, "--include="+fileGlob)
 	}
+	// grep's --exclude is case-sensitive and knows nothing of .gitignore;
+	// formatKept's line check is what actually holds on this path.
+	for _, g := range secrets.SearchExcludes {
+		args = append(args, "--exclude="+g, "--exclude-dir="+g)
+	}
 	args = append(args, "--", pattern, searchPath)
 
 	cmd := exec.Command("grep", args...)
@@ -194,9 +211,56 @@ func runGrep(pattern, searchPath, fileGlob string) (SearchOutcome, error) {
 		return SearchOutcome{}, fmt.Errorf("grep failed: %w", err)
 	}
 
-	return formatResults(pattern, string(output)), nil
+	return formatKept(pattern, string(output)), nil
 }
 // =============================================
+
+// formatKept drops every line from a protected file, then formats what is
+// left. Dropped lines are not counted in NaiveChars either: they were never
+// going to be returned, so they are not a saving.
+func formatKept(pattern, raw string) SearchOutcome {
+	kept := dropProtected(raw)
+	if kept == "" {
+		return formatEmpty(pattern)
+	}
+	return formatResults(pattern, kept)
+}
+
+// lineNumberSep finds the ":<line>:" that ends the path in an rg/grep
+// output line.
+var lineNumberSep = regexp.MustCompile(`:\d+:`)
+
+// dropProtected removes lines whose file is protected. The path cannot be
+// split off reliably — a file name may itself contain ":12:" — so every
+// prefix ending at a ":<n>:" is checked, and the line is dropped if any of
+// them is protected. A false drop costs one search result; a false keep
+// would leak a key, so the ambiguity is resolved toward dropping.
+func dropProtected(raw string) string {
+	verdicts := map[string]bool{}
+	var kept strings.Builder
+	for _, line := range strings.SplitAfter(raw, "\n") {
+		if line == "" {
+			continue
+		}
+		protected := false
+		for _, loc := range lineNumberSep.FindAllStringIndex(line, -1) {
+			prefix := line[:loc[0]]
+			verdict, ok := verdicts[prefix]
+			if !ok {
+				verdict = secrets.IsProtected(prefix)
+				verdicts[prefix] = verdict
+			}
+			if verdict {
+				protected = true
+				break
+			}
+		}
+		if !protected {
+			kept.WriteString(line)
+		}
+	}
+	return kept.String()
+}
 
 // ==================== NEW ====================
 // formatResults renders the raw rg/grep output as a bounded, headered
