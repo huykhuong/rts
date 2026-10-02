@@ -13,10 +13,24 @@ import (
 	"time"
 
 	"rts/index"
+	"rts/secrets"
 	"rts/tool"
 )
 
 var buildVersion = "unknown"
+
+// redactor scrubs the project's key values from everything crossing the MCP
+// boundary in either direction. Start points it at the working directory and
+// the resolved root; a worktree's seeded key and the main checkout's are both
+// caught.
+var redactor = secrets.NewRedactor()
+
+// writeLine is the only place a JSON-RPC message leaves the server. Every
+// response passes through the redactor here, so no tool, error message or
+// future handler can return a key value without going through it.
+func writeLine(line string) {
+	fmt.Println(redactor.Redact(line))
+}
 
 // Start loops indefinitely, reading requests from Claude via Stdin
 // and responding via Stdout.
@@ -34,6 +48,7 @@ func Start(buildTime string) {
 	// so every store below is rooted at the main checkout's when there is
 	// one, not the worktree's own working directory.
 	root := index.ResolveRoot(cwd)
+	redactor = secrets.NewRedactor(cwd, root)
 
 	indexCache := NewIndexCache(root)
 
@@ -69,7 +84,7 @@ func Start(buildTime string) {
 // handleInitialize answers the initial handshake when Claude Code starts up.
 func handleInitialize(id json.RawMessage) {
 	// MCP requires a basic acknowledgment response to prove the server is alive.
-	fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"rts","version":%q}}}`+"\n", id, buildVersion)
+	writeLine(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"rts","version":%q}}}`, id, buildVersion))
 }
 
 // handleToolsList advertises our skeletonizer tool directly to Claude's brain.
@@ -247,11 +262,15 @@ func handleToolsList(id json.RawMessage) {
 	}
 
 	out, _ := json.Marshal(response)
-	fmt.Println(string(out))
+	writeLine(string(out))
 }
 
 // handleToolsCall executes our Go skeletonizer logic and streams the text back to Claude.
 func handleToolsCall(rawRequest []byte, id json.RawMessage, root string, session string, cache *FileCache, indexCache *IndexCache, logger *EventLogger) {
+	// Requests are scrubbed too: a key value pasted into a search pattern or
+	// a recorded finding must not be searched for, logged or stored.
+	rawRequest = []byte(redactor.Redact(string(rawRequest)))
+
 	// Use RawMessage for arguments so we can decode heterogeneous field types
 	// (string for "path", []string for "method_names").
 	var callReq struct {
@@ -319,6 +338,11 @@ func handleToolsCall(rawRequest []byte, id json.RawMessage, root string, session
 	filePath, err := stringArg(callReq.Params.Arguments, "path")
 	if err != nil {
 		sendError(id, err.Error())
+		return
+	}
+
+	if secrets.IsProtected(filePath) {
+		sendError(id, secrets.Refusal(filePath))
 		return
 	}
 
@@ -402,7 +426,7 @@ func handleToolsCall(rawRequest []byte, id json.RawMessage, root string, session
 	}
 
 	out, _ := json.Marshal(resp)
-	fmt.Println(string(out))
+	writeLine(string(out))
 }
 
 // formatMethodResults renders the extracted methods in the order they were
@@ -484,7 +508,7 @@ func stringArrayArg(args map[string]json.RawMessage, key string) ([]string, erro
 }
 
 func sendError(id json.RawMessage, errMsg string) {
-	fmt.Printf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32603,"message":%q}}`+"\n", id, errMsg)
+	writeLine(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32603,"message":%q}}`, id, errMsg))
 }
 
 // handleFindSymbol queries the symbol index and returns a formatted
@@ -522,7 +546,7 @@ func handleFindSymbol(args map[string]json.RawMessage, id json.RawMessage, index
 	}
 
 	out, _ := json.Marshal(resp)
-	fmt.Println(string(out))
+	writeLine(string(out))
 }
 
 func handleGetStats(id json.RawMessage, logger *EventLogger) {
@@ -543,7 +567,7 @@ func handleGetStats(id json.RawMessage, logger *EventLogger) {
 	}
 
 	out, _ := json.Marshal(resp)
-	fmt.Println(string(out))
+	writeLine(string(out))
 }
 
 func formatStats(stats *SessionStats) string {

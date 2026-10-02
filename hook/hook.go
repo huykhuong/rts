@@ -12,6 +12,7 @@ import (
 
 	"rts/brief"
 	"rts/index"
+	"rts/secrets"
 )
 
 // PreToolUseInput models the JSON Claude Code sends on stdin. We only
@@ -93,10 +94,10 @@ func SessionContext(input PreToolUseInput, now time.Time) string {
 		return ""
 	}
 
-	root := input.Cwd
-	if root == "" {
+	cwd := input.Cwd
+	if cwd == "" {
 		var err error
-		if root, err = os.Getwd(); err != nil {
+		if cwd, err = os.Getwd(); err != nil {
 			return ""
 		}
 	}
@@ -104,7 +105,7 @@ func SessionContext(input PreToolUseInput, now time.Time) string {
 	// A linked git worktree has no .rts/ of its own — see index.ResolveRoot
 	// — so a session that starts inside one is oriented from its main
 	// checkout's stores instead of starting from nothing.
-	root = index.ResolveRoot(root)
+	root := index.ResolveRoot(cwd)
 
 	// Refreshed on every start, a resume included: a resumed session skips
 	// the brief, but it still calls find_symbol against the index.
@@ -116,7 +117,10 @@ func SessionContext(input PreToolUseInput, now time.Time) string {
 		return ""
 	}
 
-	return brief.Render(root, brief.Options{Now: now, Drift: drift, Refreshing: refreshing})
+	// The brief replays recorded findings straight into the new session, so
+	// it is scrubbed like any MCP response before it gets there.
+	text := brief.Render(root, brief.Options{Now: now, Drift: drift, Refreshing: refreshing})
+	return secrets.NewRedactor(cwd, root).Redact(text)
 }
 
 func writeDeny(w io.Writer, reason string) error {

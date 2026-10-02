@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"rts/index"
 	"rts/insight"
 	"rts/mcp"
+	"rts/secrets"
 	"rts/tool"
 )
 
@@ -90,7 +92,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// An agent can run this through Bash as easily as a person can, so it is
+	// held to the same rules as view_file: refused by name, scrubbed by value.
 	filePath := os.Args[1]
+	if secrets.IsProtected(filePath) {
+		fmt.Fprintln(os.Stderr, secrets.Refusal(filePath))
+		os.Exit(1)
+	}
 	file, err := os.Open(filePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening file: %v\n", err)
@@ -98,10 +106,19 @@ func main() {
 	}
 	defer file.Close()
 
-	if err := tool.Process(file, os.Stdout); err != nil {
+	var out bytes.Buffer
+	if err := tool.Process(file, &out); err != nil {
 		fmt.Fprintf(os.Stderr, "Error skeletonizing file: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Print(cliRedactor().Redact(out.String()))
+}
+
+// cliRedactor scrubs key values from a CLI command's output, reading keys
+// from both the working directory and the main checkout it resolves to.
+func cliRedactor() secrets.Redactor {
+	cwd, _ := os.Getwd()
+	return secrets.NewRedactor(cwd, index.ResolveRoot(cwd))
 }
 
 // runIndex parses the project and writes all three derived artifacts.
@@ -182,7 +199,7 @@ func runBrief() {
 	}
 	root = index.ResolveRoot(root)
 
-	text := brief.Render(root, brief.Options{})
+	text := cliRedactor().Redact(brief.Render(root, brief.Options{}))
 	if text == "" {
 		fmt.Println("Nothing to brief: no project map and no recorded findings.")
 		fmt.Println("Run `rts index` in the project root to build the map.")
