@@ -170,6 +170,10 @@ func Resolve(projectRoot, checkout string, idx *index.IndexFile, f *Feature) []s
 			problems = append(problems, fmt.Sprintf("a note is %d characters; keep each under %d", len(n), MaxNoteChars))
 			continue
 		}
+		if word, ok := namesScratchFile(n); ok {
+			problems = append(problems, fmt.Sprintf("a note names %q, a scratch file that will not outlive this checkout; say what it does instead of where it is", word))
+			continue
+		}
 		if word, ok := namesProtectedFile(n); ok {
 			problems = append(problems, fmt.Sprintf("a note names %q, a protected credential file; feature maps never mention one", word))
 			continue
@@ -326,7 +330,19 @@ func isTestPath(p string) bool {
 // would refuse to open. The guard redacts key values wherever they appear;
 // this is the stricter rule on top, that a map never even points at one.
 func namesProtectedFile(note string) (string, bool) {
-	words := strings.FieldsFunc(note, func(r rune) bool {
+	for _, w := range pathWords(note) {
+		if secrets.IsProtected(w) {
+			return w, true
+		}
+	}
+	return "", false
+}
+
+// pathWords splits a note into the words that could be file names: runs of
+// letters, digits and . / _ -, with a sentence's closing full stop dropped.
+func pathWords(note string) []string {
+	var out []string
+	for _, w := range strings.FieldsFunc(note, func(r rune) bool {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 			return false
@@ -334,10 +350,28 @@ func namesProtectedFile(note string) (string, bool) {
 			return false
 		}
 		return true
-	})
-	for _, w := range words {
-		w = strings.TrimRight(w, ".")
-		if w != "" && secrets.IsProtected(w) {
+	}) {
+		if w = strings.TrimRight(w, "."); w != "" {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// scratchDirs are folders whose files do not last: git-ignored output and
+// working space, and Claude Code's own worktrees and plans. A map is read for
+// months, so a note pointing into one points at nothing soon after.
+var scratchDirs = map[string]bool{
+	"tmp": true, "log": true, "coverage": true, "node_modules": true, ".claude": true,
+}
+
+// namesScratchFile reports the first word in a note that names a file in a
+// scratch folder. Only paths to a file count, so a note can still say that
+// something is written under tmp/ at runtime.
+func namesScratchFile(note string) (string, bool) {
+	for _, w := range pathWords(note) {
+		parts := strings.Split(strings.TrimPrefix(w, "./"), "/")
+		if len(parts) > 1 && scratchDirs[parts[0]] && filepath.Ext(parts[len(parts)-1]) != "" {
 			return w, true
 		}
 	}
