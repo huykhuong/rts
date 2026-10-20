@@ -184,7 +184,8 @@ func TestShouldIndex(t *testing.T) {
 		{"app/models/user.rb", true},
 		{"lib/tasks/thing.rb", true},
 		{"README.md", false},
-		{"app/assets/x.js", false},
+		{"app/assets/x.css", false},
+		{"app/javascript/x.js", true},
 		{filepath.Join("db", "migrate", "20260101_x.rb"), false},
 	}
 

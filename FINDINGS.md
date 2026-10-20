@@ -256,10 +256,17 @@ it there in the meantime.
   or `content_element.rb` at all. A test file is something you open because
   the task took you there, not something you orient on. They stay in the
   layout table, where knowing the suite is large is worth something.
-- **The map describes a Ruby project.** `rts index` parses `.rb` only. In a Go
-  or Node repo the map still reports layout, entry points and large files, and
-  the brief stops advertising the Ruby-only tools — but the symbol counts that
-  rank everything will be zero.
+- **TypeScript and JavaScript are indexed; only Ruby gets the code views.**
+  `rts index` also reads `.ts`, `.tsx`, `.js` and their variants (not `.d.ts`,
+  and not `dist/` or `app/assets/builds/`): top-level classes, interfaces,
+  types, enums, functions and constants, and the methods inside a class —
+  including the unnamed `export default class extends Controller` every
+  Stimulus controller is, whose methods are filed under no class. Hangout, a
+  TypeScript project with 425 such files, went from 0 symbols to 7,996, in
+  under a second; steroidd gains about 2,400 from its JavaScript. So
+  `find_symbol` and named feature-map members work in both. The skeleton and
+  method views still read Ruby only, so the brief offers them on a Rails or
+  Ruby project and nowhere else. In a Go repo the symbol counts stay zero.
 
 ### What a real session found, and what it cost
 

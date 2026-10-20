@@ -34,7 +34,7 @@ func Prune(db *sql.DB, projectRoot string, idx *index.IndexFile) (PruneResult, e
 
 	known := make(map[string]bool, len(idx.Symbols))
 	for _, sym := range idx.Symbols {
-		if sym.Kind == "class" || sym.Kind == "module" {
+		if index.Mappable(sym) {
 			known[index.QualifiedName(sym)] = true
 		}
 	}

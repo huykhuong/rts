@@ -225,10 +225,26 @@ func TestRenderFooter_OnlyAdvertisesToolsThatWorkHere(t *testing.T) {
 	// credibility.
 	t.Run("ruby project", func(t *testing.T) {
 		var buf strings.Builder
-		renderFooter(&buf, &index.ProjectMap{Counts: index.Counts{Symbols: 40}})
+		renderFooter(&buf, &index.ProjectMap{Kind: "rails", Counts: index.Counts{Symbols: 40}})
 
 		if !strings.Contains(buf.String(), "view_bionic_skeleton") {
 			t.Errorf("a project with Ruby symbols should be offered the skeletonizer:\n%s", buf.String())
+		}
+	})
+
+	t.Run("typescript project", func(t *testing.T) {
+		// TypeScript is indexed, so find_symbol works there; the skeleton
+		// and method views still read Ruby only.
+		var buf strings.Builder
+		renderFooter(&buf, &index.ProjectMap{Kind: "node", Counts: index.Counts{Symbols: 7996}})
+
+		if !strings.Contains(buf.String(), "find_symbol") {
+			t.Errorf("an indexed TypeScript project should be offered find_symbol:\n%s", buf.String())
+		}
+		for _, unwanted := range []string{"view_bionic_skeleton", "view_bionic_method"} {
+			if strings.Contains(buf.String(), unwanted) {
+				t.Errorf("a TypeScript project was offered %s, which reads Ruby only:\n%s", unwanted, buf.String())
+			}
 		}
 	})
 

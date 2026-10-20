@@ -131,7 +131,7 @@ func TestResolve_ListsEveryProblemAtOnce(t *testing.T) {
 	joined := strings.Join(problems, "\n")
 
 	for _, want := range []string{
-		`"BoardTemplat": no class or module`,
+		`"BoardTemplat": nothing by that name`,
 		`"Template": ambiguous; use the full name: Admin::Template, Report::Template`,
 		`"apply": is a method`,
 		`"app/models/missing.rb": no such file`,
@@ -447,7 +447,7 @@ func TestResolve_FindsBranchOnlyCodeInTheSessionsCheckout(t *testing.T) {
 	wt := withWorktree(t, root)
 
 	f := barChart()
-	if problems := Resolve(root, "", idx, &f); !strings.Contains(strings.Join(problems, "\n"), `"BarChart": no class or module`) {
+	if problems := Resolve(root, "", idx, &f); !strings.Contains(strings.Join(problems, "\n"), `"BarChart": nothing by that name`) {
 		t.Fatalf("without the worktree, BarChart should not resolve: %v", problems)
 	}
 

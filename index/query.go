@@ -116,3 +116,16 @@ func lastSegment(qualified string) string {
 func QualifiedName(sym Symbol) string {
 	return qualifiedName(sym)
 }
+
+// Mappable reports whether a symbol can stand for a member of a feature map:
+// a class, module, interface, type or enum, or a function or constant at
+// file scope. A method is part of something else, and the map names that.
+func Mappable(sym Symbol) bool {
+	switch sym.Kind {
+	case "class", "module", "interface", "type", "enum":
+		return true
+	case "function", "const":
+		return sym.Container == ""
+	}
+	return false
+}
