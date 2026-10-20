@@ -353,6 +353,15 @@ reach for `grep` instead of `find_symbol`/`search_text`, and RTS can't stop it.
 
 Treat this as an **accepted limitation**.
 
+### The Bash hook must stay project-scoped
+
+RTS's Bash-blocking hook is installed per project (`.claude/settings.local.json`)
+by design, and must stay that way. rtk's hook is global on the same `Bash`
+matcher. Wiring RTS's hook globally would put two `PreToolUse` hooks in
+contention on every Bash call in every project — one rewriting `cat` toward
+`rtk read`, the other denying it toward `view_file`. Keep RTS's hook scoped to
+the projects it indexes.
+
 ### `RTS_DISABLE=1` has to be set where the process can see it
 
 The MCP config launches the server with `env: {}`, which strips the inherited
@@ -374,14 +383,36 @@ at all.
 
 The most useful thing this document can say is where the remaining money is.
 
-Per real session data, **the largest untouched token cost is Bash and tool
-output** — test runs, migration logs, lint, stack traces. RTS currently does
-nothing about any of it, and in execution-heavy sessions it dominates
-everything RTS *does* optimize.
+Per real session data, **the largest token cost RTS does not touch is Bash and
+tool output** — test runs, migration logs, lint, stack traces. In
+execution-heavy sessions it dominates everything RTS *does* optimize.
 
-Compressing or summarizing command output is the most promising unexplored
-direction for this tool. Everything on the file-reading side is incremental
-tuning by comparison.
+That cost is already handled, though — by `rtk`, a Rust
+output-filter proxy that runs as a global `PreToolUse` hook on `Bash`
+(`rtk hook claude` in `~/.claude/settings.json`) and has roughly 70
+command-specific filters. Those already cover the Ruby commands RTS cares about
+(`rspec`, `rake`/Minitest, `rubocop`), plus linters, build tools, VCS, and
+generic error and log output. An `rts run` equivalent would mean re-implementing
+those filters to reach parity with something `brew upgrade` keeps current. RTS
+should not duplicate it.
+
+What RTS has that rtk does not is **structure-awareness**: skeleton views,
+method and Minitest-test extraction by name, and the `.rts/symbols.json`
+symbol index. None of rtk's subcommands understand code structure — `rtk read`
+is line-based truncation (`--level`, `--max-lines`, `--tail-lines`), and
+`find_symbol` is a different kind of thing from `rtk grep`. That is the part
+worth investing in.
+
+For **Rails-specific** command output rtk does not yet cover (`rails runner`
+diagnostics, migration logs), the right move is to extend rtk with its
+project-local TOML filters (`rtk trust` / `rtk verify`) — days of work and no
+hook collision — rather than building it into RTS.
+
+One caveat on the numbers above: the ~7%-of-session figure in *Measured value*
+was most likely measured while rtk was already filtering Bash output. That 7%
+is a share of an already-discounted bill, so RTS's share of what remains is
+larger than the raw figure suggests. Read it as "reading was a small slice of
+that session", not as an indictment of RTS.
 
 The second-largest cost was **rediscovery across sessions**, and that one is
 now addressed — see *Cross-session memory* above. It is worth saying what is
