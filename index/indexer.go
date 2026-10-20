@@ -24,6 +24,8 @@ var skippedDirs = map[string]bool{
 	"node_modules": true,
 	"coverage":     true,
 	"public":       true,
+	"dist":         true, // build output of a JS/TS project
+	"builds":       true, // app/assets/builds: Rails' bundled JS and CSS
 }
 
 var skippedPathSuffixes = []string{
@@ -67,6 +69,9 @@ func BuildIndex(projectRoot string) ([]Symbol, error) {
 		}
 
 		symbols := ParseFile(relPath, source)
+		if isScript(path) {
+			symbols = ParseTypeScript(relPath, source)
+		}
 		all = append(all, symbols...)
 		filesIndexed++
 		return nil

@@ -247,7 +247,7 @@ func (r *resolver) localIndex() *index.IndexFile {
 	return r.local
 }
 
-var errNotDefined = errors.New("no class or module by that name in the index (run `rts index` if it is new)")
+var errNotDefined = errors.New("nothing by that name in the index: no class, module, interface, type, function or constant (run `rts index` if it is new)")
 
 func lookupClass(idx *index.IndexFile, ref string) (string, string, error) {
 	if idx == nil {
@@ -258,7 +258,7 @@ func lookupClass(idx *index.IndexFile, ref string) (string, string, error) {
 	byName := map[string][]index.Symbol{}
 	var methods int
 	for _, sym := range found.Symbols {
-		if sym.Kind != "class" && sym.Kind != "module" {
+		if !index.Mappable(sym) {
 			methods++
 			continue
 		}
@@ -279,7 +279,7 @@ func lookupClass(idx *index.IndexFile, ref string) (string, string, error) {
 		sort.Strings(names)
 		return "", "", fmt.Errorf("ambiguous; use the full name: %s", strings.Join(names, ", "))
 	case methods > 0:
-		return "", "", fmt.Errorf("is a method, not a class or module; name the class it belongs to")
+		return "", "", fmt.Errorf("is a method; name the class it belongs to")
 	}
 	return "", "", errNotDefined
 }
