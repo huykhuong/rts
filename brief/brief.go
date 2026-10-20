@@ -298,14 +298,11 @@ func renderFooter(buf *strings.Builder, pm *index.ProjectMap) {
 	buf.WriteString("\nTo go deeper, use the rts tools rather than reading files whole:\n")
 
 	if pm != nil && pm.Counts.Symbols > 0 {
-		buf.WriteString("  find_symbol — where a class/method/constant is defined\n")
-		// The skeleton and method views read Ruby only; a TypeScript project
-		// has symbols now, and advertising them there sends a session to a
-		// tool that cannot help it.
-		if pm.Kind == "rails" || pm.Kind == "ruby" {
-			buf.WriteString("  view_bionic_skeleton — a big Ruby file's structure\n" +
-				"  view_bionic_method — one method body, several at a time\n")
-		}
+		// Symbols come from Ruby, TypeScript and JavaScript, and the skeleton
+		// and method views read all three.
+		buf.WriteString("  find_symbol — where a class/method/constant is defined\n" +
+			"  view_bionic_skeleton — a big Ruby/TypeScript/JavaScript file's structure\n" +
+			"  view_bionic_method — one method or function body, several at a time\n")
 	}
 
 	buf.WriteString("  view_file — read any file (routes large Ruby files to a skeleton)\n" +

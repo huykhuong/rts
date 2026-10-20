@@ -6,12 +6,15 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+
+	"rts/index"
 )
 
 type fileKind int
 
 const (
 	kindRuby	fileKind = iota
+	kindScript
 	kindPassthrough
 	kindUnknown
 )
@@ -27,7 +30,6 @@ var knownTextExtensions = map[string]bool{
 	".md": true, ".txt": true,
 	// Web / views
 	".html": true, ".erb": true, ".css": true, ".scss": true,
-	".js": true, ".jsx": true, ".ts": true, ".tsx": true,
 	// Config & data
 	".yml": true, ".yaml": true, ".json": true, ".xml": true, ".toml": true,
 	// Logs
@@ -46,6 +48,10 @@ func classify(path string) fileKind {
 
 	if rubyBasenames[base] {
 		return kindRuby
+	}
+
+	if index.IsScript(path) {
+		return kindScript
 	}
 
 	if knownTextExtensions[ext] {
@@ -78,6 +84,8 @@ func ViewFile(path string, r io.Reader, w io.Writer) error {
 	case kindRuby:
 		// Ruby files will just use the existing logics.
 		return Process(r, w)
+	case kindScript:
+		return ProcessScript(path, r, w)
 	case kindPassthrough, kindUnknown:
 		return passthroughWithHeader(path, kind, r, w)
 	}

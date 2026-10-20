@@ -281,7 +281,7 @@ func rankDirs(files, symbols map[string]int) []DirSummary {
 func rankLargest(sized []FileSummary) []FileSummary {
 	var big []FileSummary
 	for _, f := range sized {
-		if f.Lines >= largeFileLines && strings.HasSuffix(f.Path, ".rb") && !isTestPath(f.Path) {
+		if f.Lines >= largeFileLines && (strings.HasSuffix(f.Path, ".rb") || IsScript(f.Path)) && !isTestPath(f.Path) {
 			big = append(big, f)
 		}
 	}
@@ -307,9 +307,18 @@ func isTestPath(path string) bool {
 	if strings.HasSuffix(path, "_test.rb") || strings.HasSuffix(path, "_spec.rb") {
 		return true
 	}
+	// TypeScript and JavaScript name tests foo.test.ts or foo.spec.js.
+	base := filepath.Base(path)
+	if strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") {
+		return true
+	}
+	// Jest's __tests__ folders sit next to the code, at any depth.
+	if strings.Contains(string(filepath.Separator)+path, string(filepath.Separator)+"__tests__"+string(filepath.Separator)) {
+		return true
+	}
 
 	switch first, _, _ := strings.Cut(path, string(filepath.Separator)); first {
-	case "test", "spec":
+	case "test", "spec", "tests":
 		return true
 	}
 	return false

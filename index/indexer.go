@@ -69,7 +69,7 @@ func BuildIndex(projectRoot string) ([]Symbol, error) {
 		}
 
 		symbols := ParseFile(relPath, source)
-		if isScript(path) {
+		if IsScript(path) {
 			symbols = ParseTypeScript(relPath, source)
 		}
 		all = append(all, symbols...)
