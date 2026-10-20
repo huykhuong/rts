@@ -314,8 +314,34 @@ feature out saves it as a **feature map** — members (classes, files,
 directories, each with a role), typed edges between them, and up to eight
 notes — and every later session gets it back in one call. The steroidd map
 built from that Explore report reads back in **6,348 characters, about 1,600
-tokens**. Whether a session with the map really skips the exploration is the
-pilot's next measurement, not yet run; do not quote a saving until it is.
+tokens**.
+
+**It did not save anything yet.** Two fresh plan-mode sessions on the same
+prompt ("list every file I need to change to add a `bar_chart` template"),
+one with the map and one without, on 2026-10-20:
+
+| | Without the map | With the map |
+|---|---|---|
+| Turns | 39 | 48 |
+| Uncached input + cache writes (main thread) | 163k | 258k |
+| Cost | $1.09 | $1.25 |
+| Required items found (of 12 on `dev`) | 12 | 12 |
+
+The session with the map read it first, said "useful map, but its notes are
+unverified — let me check the key claims against the code", and then checked
+everything. Two notes did not hold on `dev` (they named code only on a
+branch), which is exactly what a check is for. The labels RTS puts on a map
+— notes "not verified", "confirm before relying" — invite that, and a task
+that asks for line numbers needs the lines read regardless. One run each, so
+the spread is unmeasured; an earlier pair differed by $0.65 on whether the
+session happened to start an Explore agent.
+
+The same pair is also the first measurement of RTS in plan mode, because it
+did not work there before: every RTS tool was refused ("Cannot call
+mcp__rts__… while in plan mode") until the read-only ones declared MCP's
+`readOnlyHint`. The session without the map then answered fully in 39 turns
+using RTS's own search and skeleton tools, where the Explore agent that
+prompted all this had taken 149 without them.
 
 ### Claude supplies the understanding; RTS keeps it honest
 
