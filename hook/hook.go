@@ -24,13 +24,22 @@ type PreToolUseInput struct {
 	ToolInput json.RawMessage `json:"tool_input"`
 
 	// HookEventName is how Claude Code says which hook fired. RTS is wired
-	// to two of them — PreToolUse to block wasteful reads, SessionStart to
-	// hand the session its orientation — and one binary answers both.
+	// to three of them — PreToolUse to block wasteful reads, SessionStart to
+	// hand the session its orientation, Stop to ask it to save a feature map
+	// of what it explored — and one binary answers all three.
 	HookEventName string `json:"hook_event_name"`
 
 	// Source is set on SessionStart only: "startup", "resume", "clear" or
 	// "compact". It decides whether the brief is worth emitting at all.
 	Source string `json:"source"`
+
+	// The Stop event's fields: whose session this is, where its transcript
+	// is, whether this stop was itself caused by a Stop hook, and the mode
+	// the session is in.
+	SessionID      string `json:"session_id"`
+	TranscriptPath string `json:"transcript_path"`
+	StopHookActive bool   `json:"stop_hook_active"`
+	PermissionMode string `json:"permission_mode"`
 }
 
 // readToolInput is the shape of tool_input when tool_name == "Read".
@@ -65,7 +74,15 @@ func Run(r io.Reader, w io.Writer) error {
 		return nil // fail open: allow Claude to move on
 	}
 
-	if input.HookEventName == "SessionStart" {
+	if input.HookEventName == "Stop" {
+		reason := StopReason(input, time.Now())
+		if reason == "" {
+			return nil
+		}
+		return writeStop(w, reason)
+	}
+
+		if input.HookEventName == "SessionStart" {
 		context := SessionContext(input, time.Now())
 		if context == "" {
 			return nil

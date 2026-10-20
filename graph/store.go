@@ -34,7 +34,7 @@ import (
 // SchemaVersion is stored in PRAGMA user_version. Like insights, the graph
 // holds conclusions nothing can rebuild, so an unknown version is an error
 // the caller sees rather than a reason to start over.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // EdgeKinds is the closed list of connections a map may claim. It is closed so
 // that queries can filter on a kind and a made-up one is refused at the door
@@ -85,6 +85,12 @@ CREATE TABLE IF NOT EXISTS feature_history (
 	name        TEXT NOT NULL,
 	snapshot    TEXT NOT NULL,
 	replaced_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS stop_asks (
+	session  TEXT NOT NULL,
+	area     TEXT NOT NULL,
+	asked_at TEXT NOT NULL,
+	PRIMARY KEY (session, area)
 );
 `
 
@@ -140,10 +146,13 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 
+	// Version 1 lacked stop_asks. Every statement in the schema is IF NOT
+	// EXISTS, so running it over a version 1 graph adds the new table and
+	// leaves the feature maps alone.
 	switch version {
 	case SchemaVersion:
 		return nil
-	case 0:
+	case 0, 1:
 		tx, err := db.Begin()
 		if err != nil {
 			return err

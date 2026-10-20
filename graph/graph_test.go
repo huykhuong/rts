@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"rts/index"
 )
@@ -386,5 +387,35 @@ func TestPrune_DropsWhatTheCodeNoLongerHas(t *testing.T) {
 	features, _ := Summaries(db, root)
 	if len(features) != 1 || features[0].Name != "board templates" || features[0].Members != 3 {
 		t.Errorf("board templates should survive with 3 members; got %+v", features)
+	}
+}
+
+func TestOpen_UpgradesAVersionOneGraphInPlace(t *testing.T) {
+	root, idx := project(t)
+	db := open_(t, root)
+	saved(t, db, root, idx, boardTemplates())
+
+	// Turn it back into what version 1 wrote: no stop_asks table.
+	if _, err := db.Exec("DROP TABLE stop_asks; PRAGMA user_version = 1"); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	upgraded, err := Open(root)
+	if err != nil {
+		t.Fatalf("opening a version 1 graph: %v", err)
+	}
+	defer func() { _ = upgraded.Close() }()
+
+	var version int
+	_ = upgraded.QueryRow("PRAGMA user_version").Scan(&version)
+	if version != SchemaVersion {
+		t.Errorf("user_version = %d after the upgrade, want %d", version, SchemaVersion)
+	}
+	if err := MarkAsked(upgraded, "s", []string{"board_template"}, time.Now()); err != nil {
+		t.Errorf("stop_asks is missing after the upgrade: %v", err)
+	}
+	if features, _ := Summaries(upgraded, root); len(features) != 1 {
+		t.Errorf("the upgrade lost the feature maps: %+v", features)
 	}
 }
