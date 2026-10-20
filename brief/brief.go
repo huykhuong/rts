@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"rts/graph"
 	"rts/index"
 	"rts/insight"
 )
@@ -36,6 +37,11 @@ const maxRenderedInsights = 12
 // know whether it bears on the task, short enough that twelve of them do not
 // crowd out the map. record_insight returns the whole body when asked.
 const bodyPreviewChars = 220
+
+// maxRenderedFeatures bounds the "Mapped features" list. One line each, so a
+// session can tell at a glance whether the area it is about to work in has a
+// map, without the list becoming a second project map.
+const maxRenderedFeatures = 30
 
 // Options carry what the caller knows that the stores do not.
 type Options struct {
@@ -79,8 +85,9 @@ func Render(projectRoot string, opts Options) string {
 		store = &insight.Store{}
 	}
 	findings := insight.Live(projectRoot, store)
+	features := loadFeatures(projectRoot)
 
-	if mapErr != nil && len(findings) == 0 {
+	if mapErr != nil && len(findings) == 0 && len(features) == 0 {
 		return ""
 	}
 
@@ -89,6 +96,7 @@ func Render(projectRoot string, opts Options) string {
 	if pm != nil {
 		renderMap(&buf, pm)
 	}
+	renderFeatures(&buf, features)
 	renderFindings(&buf, findings)
 
 	if pm != nil {
@@ -146,6 +154,51 @@ func renderMap(buf *strings.Builder, pm *index.ProjectMap) {
 		for _, f := range pm.Largest {
 			fmt.Fprintf(buf, "  %-52s %s lines\n", f.Path, formatInt(f.Lines))
 		}
+	}
+}
+
+// loadFeatures reads the feature list without ever creating a graph: the brief
+// runs in every project, and most have never mapped anything.
+func loadFeatures(projectRoot string) []graph.Summary {
+	db, err := graph.OpenExisting(projectRoot)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = db.Close() }()
+
+	features, err := graph.Summaries(db, projectRoot)
+	if err != nil {
+		return nil
+	}
+	return features
+}
+
+// renderFeatures lists what touchpoints can answer, so a session about board
+// templates learns in its first turn that it need not send an Explore agent.
+func renderFeatures(buf *strings.Builder, features []graph.Summary) {
+	if len(features) == 0 {
+		return
+	}
+
+	shown := features
+	if len(shown) > maxRenderedFeatures {
+		shown = shown[:maxRenderedFeatures]
+	}
+
+	fmt.Fprintf(buf, "\n--- Mapped features (%d) ---\n", len(features))
+	buf.WriteString("Call touchpoints with a name below before exploring that area: it returns\n" +
+		"the feature's classes, files and connections in one call.\n\n")
+
+	for _, f := range shown {
+		line := fmt.Sprintf("  %s — %s, mapped %s", f.Name, plural(f.Members, "member"), f.UpdatedAt.Local().Format("2006-01-02"))
+		if f.Changed > 0 {
+			line += fmt.Sprintf(" (%d changed since)", f.Changed)
+		}
+		buf.WriteString(line + "\n")
+	}
+
+	if len(features) > len(shown) {
+		fmt.Fprintf(buf, "\n  (%d more — `rts graph` lists them all)\n", len(features)-len(shown))
 	}
 }
 
@@ -253,7 +306,9 @@ func renderFooter(buf *strings.Builder, pm *index.ProjectMap) {
 		buf.WriteString("  project_map — this map again, in full\n")
 	}
 
-	buf.WriteString("  record_insight — write a finding back here, so the next session starts with it\n")
+	buf.WriteString("  touchpoints — a mapped feature's classes, files and connections, in one call\n" +
+		"  record_feature — save the map of a feature you explored, so the next session skips the exploring\n" +
+		"  record_insight — write a finding back here, so the next session starts with it\n")
 }
 
 func preview(body string) string {

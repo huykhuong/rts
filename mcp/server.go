@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"rts/graph"
 	"rts/index"
 	"rts/secrets"
 	"rts/tool"
@@ -253,11 +254,72 @@ func handleToolsList(id json.RawMessage) {
 		},
 	}
 
+	touchpointsTool := Tool{
+		Name: "touchpoints",
+		Description: "Get the map of a feature — the classes and files that make it up and how they connect — in one call, instead of exploring the codebase to work it out. " +
+			"Call this BEFORE sending an Explore agent or reading around to understand a feature: if an earlier session mapped it, this answers in a few hundred tokens. " +
+			"Pass a feature name (the mapped features are listed at session start and in project_map) or a class name; a class returns the features it belongs to and what it connects to. " +
+			"Members marked [changed] were edited after the map was written: confirm the connections around them before relying on them.",
+		InputSchema: InputSchema{
+			Type: "object",
+			Properties: map[string]Property{
+				"name": {
+					Type:        "string",
+					Description: "A feature name (e.g. 'board templates') or a class name (e.g. 'BoardTemplate').",
+				},
+				"depth": {
+					Type:        "integer",
+					Description: "Optional, for a class name: how many steps of connections to follow, 1 (default) or 2.",
+				},
+			},
+			Required: []string{"name"},
+		},
+	}
+
+	recordFeatureTool := Tool{
+		Name: "record_feature",
+		Description: "Save a map of a feature you explored or built, so the NEXT session gets it from touchpoints instead of exploring again. " +
+			"Use it when you have worked out which classes and files make up a feature and how they connect — typically at the end of a task that took real exploration — and when asked to map a feature. " +
+			"Map only what you actually read; never guess a connection to fill the picture out. " +
+			"Every class name and path is checked against the code, and a map with any name that doesn't resolve is refused whole with a list of what to fix. " +
+			"Saving a feature name that already exists replaces that map (the old one is kept in history), so send the complete map as you now understand it, not just the new parts. " +
+			"Say in one line what you saved, after you save it.",
+		InputSchema: InputSchema{
+			Type: "object",
+			Properties: map[string]Property{
+				"feature": {
+					Type:        "string",
+					Description: "Short name for the feature, in the product's own words (e.g. 'board templates').",
+				},
+				"summary": {
+					Type:        "string",
+					Description: "One or two sentences: what the feature does for the user.",
+				},
+				"members": {
+					Type:        "array",
+					Description: `The classes, modules and files that make up the feature, as objects: {"ref": "BoardTemplate", "role": "model"}. ref is a class/module name or a project-relative path (a view directory is fine); role is a word like model, controller, job, service, view, test.`,
+					Items:       &PropertyItems{Type: "object"},
+				},
+				"edges": {
+					Type:        "array",
+					Description: `How members connect, as objects: {"src": "BoardTemplatesController", "dst": "BoardTemplate", "kind": "uses"}. kind is one of: ` + strings.Join(graph.EdgeKinds, ", ") + ". src and dst may be classes outside the feature.",
+					Items:       &PropertyItems{Type: "object"},
+				},
+				"notes": {
+					Type:        "array",
+					Description: "Optional, at most 8: non-obvious facts the structure can't show (e.g. 'Templates are copied, not linked, so editing one never changes existing boards').",
+					Items:       &PropertyItems{Type: "string"},
+				},
+			},
+			Required: []string{"feature", "summary", "members"},
+		},
+	}
+
 	response := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      id,
 		"result": map[string]interface{}{
-			"tools": []Tool{projectMapTool, skeletonTool, methodTool, fileTool, findSymbolTool, recordInsightTool, statsTool, searchTool, listTool},
+			"tools": []Tool{projectMapTool, touchpointsTool, skeletonTool, methodTool, fileTool, findSymbolTool, recordInsightTool, recordFeatureTool, statsTool, searchTool, listTool},
 		},
 	}
 
@@ -311,6 +373,16 @@ func handleToolsCall(rawRequest []byte, id json.RawMessage, root string, session
 
 	if callReq.Params.Name == "record_insight" {
 		handleRecordInsight(callReq.Params.Arguments, id, root, session, logger)
+		return
+	}
+
+	if callReq.Params.Name == "touchpoints" {
+		handleTouchpoints(callReq.Params.Arguments, id, root, indexCache, logger)
+		return
+	}
+
+	if callReq.Params.Name == "record_feature" {
+		handleRecordFeature(callReq.Params.Arguments, id, root, session, indexCache, logger)
 		return
 	}
 

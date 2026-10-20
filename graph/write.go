@@ -1,0 +1,340 @@
+package graph
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"rts/index"
+	"rts/secrets"
+)
+
+const (
+	// MaxSummaryChars keeps a summary to the two or three sentences a reader
+	// takes in before the member list.
+	MaxSummaryChars = 400
+
+	// MaxNoteChars and MaxNotes bound what a map carries beyond its
+	// structure. Notes are the part nothing can check, so they are the part
+	// to keep small.
+	MaxNoteChars = 400
+	MaxNotes     = 8
+
+	// MaxMembers and MaxEdges are ceilings on one feature. A "feature" with
+	// two hundred members is the whole app under a feature's name, and its
+	// touchpoints answer would cost what the exploration it replaces did.
+	MaxMembers = 60
+	MaxEdges   = 120
+)
+
+// Feature is one feature map as a session writes it and as it is read back.
+type Feature struct {
+	Name      string
+	Summary   string
+	Members   []Member
+	Edges     []Edge
+	Notes     []string
+	UpdatedAt time.Time
+	Session   string
+}
+
+// Member is a class, module or file that makes up a feature.
+type Member struct {
+	Ref         string `json:"ref"`            // qualified class name, or a project-relative path
+	Role        string `json:"role,omitempty"` // model, controller, job, view, test...
+	Path        string `json:"path,omitempty"` // filled in from the index on write
+	Fingerprint string `json:"fingerprint,omitempty"`
+}
+
+// Edge is one connection between two refs.
+type Edge struct {
+	Src    string `json:"src"`
+	Dst    string `json:"dst"`
+	Kind   string `json:"kind"`
+	Origin string `json:"origin,omitempty"`
+}
+
+// Resolve checks a feature against the code and fills in what the index
+// knows: each class ref becomes its fully qualified name and gains the path
+// it is defined in, and each member is fingerprinted.
+//
+// It returns every problem it finds rather than the first, because the
+// caller is a model that will fix and resend: one round trip per typo would
+// turn a ten-member map into ten calls.
+func Resolve(projectRoot string, idx *index.IndexFile, f *Feature) []string {
+	var problems []string
+
+	f.Name = strings.TrimSpace(f.Name)
+	f.Summary = strings.TrimSpace(f.Summary)
+	if f.Name == "" {
+		problems = append(problems, "feature name is empty")
+	}
+	if f.Summary == "" {
+		problems = append(problems, "summary is empty: say in a sentence or two what the feature does")
+	}
+	if len(f.Summary) > MaxSummaryChars {
+		problems = append(problems, fmt.Sprintf("summary is %d characters; keep it under %d", len(f.Summary), MaxSummaryChars))
+	}
+	if len(f.Members) == 0 {
+		problems = append(problems, "no members: list the classes and files that make up the feature")
+	}
+	if len(f.Members) > MaxMembers {
+		problems = append(problems, fmt.Sprintf("%d members; a feature holds at most %d — split it into smaller features", len(f.Members), MaxMembers))
+	}
+	if len(f.Edges) > MaxEdges {
+		problems = append(problems, fmt.Sprintf("%d edges; a feature holds at most %d", len(f.Edges), MaxEdges))
+	}
+	if len(f.Notes) > MaxNotes {
+		problems = append(problems, fmt.Sprintf("%d notes; keep at most %d", len(f.Notes), MaxNotes))
+	}
+
+	seen := map[string]bool{}
+	members := make([]Member, 0, len(f.Members))
+	for _, m := range f.Members {
+		ref, path, err := resolveRef(projectRoot, idx, m.Ref)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("member %q: %v", m.Ref, err))
+			continue
+		}
+		if seen[ref] {
+			continue
+		}
+		seen[ref] = true
+
+		m.Ref, m.Path = ref, path
+		m.Role = strings.TrimSpace(m.Role)
+		if data, err := os.ReadFile(filepath.Join(projectRoot, path)); err == nil {
+			m.Fingerprint = index.Fingerprint(data)
+		}
+		members = append(members, m)
+	}
+	f.Members = members
+
+	edgeSeen := map[Edge]bool{}
+	edges := make([]Edge, 0, len(f.Edges))
+	for _, e := range f.Edges {
+		e.Kind = strings.TrimSpace(e.Kind)
+		if !validKind(e.Kind) {
+			problems = append(problems, fmt.Sprintf("edge %s → %s: kind %q is not one of %s", e.Src, e.Dst, e.Kind, strings.Join(EdgeKinds, ", ")))
+			continue
+		}
+
+		src, _, srcErr := resolveRef(projectRoot, idx, e.Src)
+		if srcErr != nil {
+			problems = append(problems, fmt.Sprintf("edge source %q: %v", e.Src, srcErr))
+		}
+		dst, _, dstErr := resolveRef(projectRoot, idx, e.Dst)
+		if dstErr != nil {
+			problems = append(problems, fmt.Sprintf("edge target %q: %v", e.Dst, dstErr))
+		}
+		if srcErr != nil || dstErr != nil {
+			continue
+		}
+
+		e.Src, e.Dst, e.Origin = src, dst, "claude"
+		if edgeSeen[e] {
+			continue
+		}
+		edgeSeen[e] = true
+		edges = append(edges, e)
+	}
+	f.Edges = edges
+
+	notes := make([]string, 0, len(f.Notes))
+	for _, n := range f.Notes {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		if len(n) > MaxNoteChars {
+			problems = append(problems, fmt.Sprintf("a note is %d characters; keep each under %d", len(n), MaxNoteChars))
+			continue
+		}
+		if word, ok := namesProtectedFile(n); ok {
+			problems = append(problems, fmt.Sprintf("a note names %q, a protected credential file; feature maps never mention one", word))
+			continue
+		}
+		notes = append(notes, n)
+	}
+	f.Notes = notes
+
+	return problems
+}
+
+// resolveRef turns a ref into its canonical form and the file it lives in.
+//
+// A ref with a slash or a file extension is a path and must exist; anything
+// else is a class or module name and must be in the index. A method name, an
+// ambiguous short name or a name nothing defines is refused with what was
+// found instead, so the fix is one edit away.
+func resolveRef(projectRoot string, idx *index.IndexFile, ref string) (string, string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", "", fmt.Errorf("empty")
+	}
+
+	if strings.Contains(ref, "/") || filepath.Ext(ref) != "" {
+		rel := filepath.Clean(strings.TrimPrefix(ref, "./"))
+		if filepath.IsAbs(rel) || strings.HasPrefix(rel, "..") {
+			return "", "", fmt.Errorf("paths are project-relative")
+		}
+		if secrets.IsProtected(rel) {
+			return "", "", fmt.Errorf("a protected credential file; feature maps never include one")
+		}
+		if _, err := os.Stat(filepath.Join(projectRoot, rel)); err != nil {
+			return "", "", fmt.Errorf("no such file or directory in this project")
+		}
+		return rel, rel, nil
+	}
+
+	found := index.Find(idx, ref)
+	byName := map[string][]index.Symbol{}
+	var methods int
+	for _, sym := range found.Symbols {
+		if sym.Kind != "class" && sym.Kind != "module" {
+			methods++
+			continue
+		}
+		q := index.QualifiedName(sym)
+		byName[q] = append(byName[q], sym)
+	}
+
+	switch {
+	case len(byName) == 1:
+		for q, defs := range byName {
+			return q, definingPath(defs), nil
+		}
+	case len(byName) > 1:
+		names := make([]string, 0, len(byName))
+		for q := range byName {
+			names = append(names, q)
+		}
+		sort.Strings(names)
+		return "", "", fmt.Errorf("ambiguous; use the full name: %s", strings.Join(names, ", "))
+	case methods > 0:
+		return "", "", fmt.Errorf("is a method, not a class or module; name the class it belongs to")
+	}
+	return "", "", fmt.Errorf("no class or module by that name in the index (run `rts index` if it is new)")
+}
+
+// definingPath picks the file to fingerprint for a class that is opened in
+// several. A test file reopening a class is not where the class lives.
+func definingPath(defs []index.Symbol) string {
+	paths := make([]string, 0, len(defs))
+	for _, d := range defs {
+		paths = append(paths, d.Path)
+	}
+	sort.SliceStable(paths, func(i, j int) bool {
+		ti, tj := isTestPath(paths[i]), isTestPath(paths[j])
+		if ti != tj {
+			return !ti
+		}
+		return paths[i] < paths[j]
+	})
+	return paths[0]
+}
+
+func isTestPath(p string) bool {
+	return strings.HasPrefix(p, "test/") || strings.HasPrefix(p, "spec/") || strings.HasSuffix(p, "_test.rb") || strings.HasSuffix(p, "_spec.rb")
+}
+
+// namesProtectedFile reports the first word in a note that the secrets guard
+// would refuse to open. The guard redacts key values wherever they appear;
+// this is the stricter rule on top, that a map never even points at one.
+func namesProtectedFile(note string) (string, bool) {
+	words := strings.FieldsFunc(note, func(r rune) bool {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return false
+		case r == '.' || r == '/' || r == '_' || r == '-':
+			return false
+		}
+		return true
+	})
+	for _, w := range words {
+		w = strings.TrimRight(w, ".")
+		if w != "" && secrets.IsProtected(w) {
+			return w, true
+		}
+	}
+	return "", false
+}
+
+// Record stores a resolved feature, replacing any earlier map of the same
+// name. The replaced version is kept in feature_history first, so a session
+// that rewrites a good map badly costs one restore rather than the map.
+//
+// Only Claude-written edges are replaced. Edges `rts index` read off the code
+// belong to the code, not to whichever session last mapped the feature.
+func Record(db *sql.DB, f Feature) (replaced bool, err error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	var id int64
+	err = tx.QueryRow("SELECT id FROM features WHERE name = ?", f.Name).Scan(&id)
+	switch {
+	case err == sql.ErrNoRows:
+		res, err := tx.Exec("INSERT INTO features (name, summary, updated_at, session) VALUES (?, ?, ?, ?)", f.Name, f.Summary, now, f.Session)
+		if err != nil {
+			return false, err
+		}
+		if id, err = res.LastInsertId(); err != nil {
+			return false, err
+		}
+	case err != nil:
+		return false, err
+	default:
+		replaced = true
+		old, err := load(tx, id)
+		if err != nil {
+			return false, err
+		}
+		snapshot, err := json.Marshal(old)
+		if err != nil {
+			return false, err
+		}
+		if _, err := tx.Exec("INSERT INTO feature_history (name, snapshot, replaced_at) VALUES (?, ?, ?)", old.Name, string(snapshot), now); err != nil {
+			return false, err
+		}
+		for _, stmt := range []string{
+			"DELETE FROM members WHERE feature_id = ?",
+			"DELETE FROM edges WHERE feature_id = ? AND origin = 'claude'",
+			"DELETE FROM notes WHERE feature_id = ?",
+		} {
+			if _, err := tx.Exec(stmt, id); err != nil {
+				return false, err
+			}
+		}
+		if _, err := tx.Exec("UPDATE features SET name = ?, summary = ?, updated_at = ?, session = ? WHERE id = ?", f.Name, f.Summary, now, f.Session, id); err != nil {
+			return false, err
+		}
+	}
+
+	for _, m := range f.Members {
+		if _, err := tx.Exec("INSERT INTO members (feature_id, ref, role, path, fingerprint) VALUES (?, ?, ?, ?, ?)", id, m.Ref, m.Role, m.Path, m.Fingerprint); err != nil {
+			return false, err
+		}
+	}
+	for _, e := range f.Edges {
+		if _, err := tx.Exec("INSERT OR IGNORE INTO edges (feature_id, src, dst, kind, origin, session) VALUES (?, ?, ?, ?, 'claude', ?)", id, e.Src, e.Dst, e.Kind, f.Session); err != nil {
+			return false, err
+		}
+	}
+	for i, n := range f.Notes {
+		if _, err := tx.Exec("INSERT INTO notes (feature_id, ord, body) VALUES (?, ?, ?)", id, i, n); err != nil {
+			return false, err
+		}
+	}
+
+	return replaced, tx.Commit()
+}

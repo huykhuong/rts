@@ -221,7 +221,7 @@ func TestKnowledgeToolsAreAdvertised(t *testing.T) {
 	// A handler nothing lists is a handler nothing calls.
 	out := captureStdout(t, func() { handleToolsList(json.RawMessage("1")) })
 
-	for _, name := range []string{"project_map", "record_insight"} {
+	for _, name := range []string{"project_map", "record_insight", "touchpoints", "record_feature"} {
 		if !strings.Contains(out, `"`+name+`"`) {
 			t.Errorf("tools/list does not advertise %q", name)
 		}
@@ -261,7 +261,7 @@ func TestKnowledgeToolsRespectTheKillSwitch(t *testing.T) {
 	root := knowledgeProject(t)
 	t.Setenv("RTS_DISABLE", "1")
 
-	for _, name := range []string{"project_map", "record_insight"} {
+	for _, name := range []string{"project_map", "record_insight", "touchpoints", "record_feature"} {
 		t.Run(name, func(t *testing.T) {
 			out := captureStdout(t, func() {
 				handleToolsCall(

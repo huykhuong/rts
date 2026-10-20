@@ -100,6 +100,7 @@ design:
 | `symbols.json` | Every definition in the project | Yes — `rts index` |
 | `map.json` | The derived map: project kind, layout, entry points, most-read files, files too big to read whole | Yes — `rts index` |
 | `insights.json` | Findings a session concluded and wrote down | **No** |
+| `graph.db` | Feature maps: which classes and files make up a feature, and how they connect (see *Feature maps* below) | **No** |
 
 The first two are *derived*: regenerated wholesale, always true of the code as
 it stands, safe to delete. The third is not. It holds conclusions, which can
@@ -294,6 +295,89 @@ One claim in that review needs correcting, because it fed the wrong diagnosis:
 chars". It logs no baseline (see the instrumentation note above), so its
 savings are **absent from the measurement, not measured as zero.** The misses
 were real; the zero was an artifact.
+
+---
+
+## Feature maps
+
+The three stores above still left one cost untouched. A session about board
+templates in steroidd on 2026-10-20 opened by sending an Explore agent to
+"map out everything involved". It ran **149 turns — 61 file reads, 38 greps,
+5 shell commands, about 493k uncached input tokens** — and came back with a
+24k-character checklist of every registry, prompt, asset, fixture and test a
+new template touches. The symbol index could say where each class lived; it
+could not say which twenty-nine of them were the feature. The next session on
+board templates would have paid all of that again.
+
+`record_feature` and `touchpoints` close that gap. A session that worked a
+feature out saves it as a **feature map** — members (classes, files,
+directories, each with a role), typed edges between them, and up to eight
+notes — and every later session gets it back in one call. The steroidd map
+built from that Explore report reads back in **6,348 characters, about 1,600
+tokens**. Whether a session with the map really skips the exploration is the
+pilot's next measurement, not yet run; do not quote a saving until it is.
+
+### Claude supplies the understanding; RTS keeps it honest
+
+Nothing in RTS can work out what a feature *is* — that takes reading the code
+with a purpose, which is what the session already did. What RTS can do is
+refuse to store a map that is not about real code:
+
+- **On write**, every member and edge end must resolve: a class or module in
+  the index (an ambiguous short name, a method, or a typo is refused with what
+  was found instead), or a path that exists. Edge kinds are a closed list. The
+  whole map is refused if anything fails, with every problem listed at once —
+  half a map stored silently would read back as the whole one.
+- **Secrets, strictly**: a protected credential file can be neither a member
+  nor named in a note, on top of the redaction every RTS tool already applies.
+- **On read**, each member file is hashed and compared with its hash at write
+  time. A changed file is marked `[changed]`, the map is still shown, and the
+  reader is told to confirm around it. Most of a stale map is still right.
+- **On `rts index`**, members and edges naming code that no longer exists are
+  dropped, and a feature with no members left goes with them.
+- Saving a feature that already exists **replaces** its map; the old one is
+  kept in `feature_history`. Notes and structure are rendered separately, the
+  notes under the same "not verified" label as findings.
+
+### Why this store is SQLite
+
+Not for speed. On a test graph of 40,000 classes and 200,000 edges — about five
+times what steroidd would hold — a JSON file answered a two-step lookup in
+0.04 ms after a 124 ms load, SQLite in about 0.5 ms with no load; Claude sees
+the same text either way. The difference is how the store is written: the
+other stores are rebuilt whole by `rts index`, while the graph is added to one
+feature at a time by many sessions, two at once whenever worktrees share a
+checkout's `.rts`. SQLite updates one feature without rewriting the file and
+serialises concurrent writers.
+
+That second point needed one fix to be true. `Record` reads before it writes,
+and a SQLite transaction that starts as a reader cannot wait its way into
+writing once another connection has committed: it fails at once with
+`SQLITE_BUSY`, busy timeout or not. Eight concurrent writers in the test lost
+five maps that way until transactions began `IMMEDIATE`.
+
+The cost: the first dependencies in `go.mod` (`modernc.org/sqlite`, pure Go,
+pinned to v1.59.0 because v1.60 requires Go 1.26), and the binary grew from
+4.3 MB to 10.9 MB. `rts graph` prints the maps, since the file cannot be read
+in an editor.
+
+### What it does not do yet
+
+- **Nothing asks a session to save a map.** That is phase 2 of the design (a
+  `Stop` hook that asks once per area when a session explored code no map
+  covers), and it waits on the phase 1 measurement. Until then maps are saved
+  when a session is told to, or decides to — the same weakness that left
+  steroidd with seven findings in two weeks.
+- **No edges are read off the code.** Every edge is a session's claim, checked
+  only for its ends existing. `has_many`, `include` and inheritance could come
+  from the parser (phase 3).
+- **Branch-only code cannot be mapped.** Names are checked against the main
+  checkout's index (see *Worktrees share the main checkout's memory*). The
+  steroidd map was built from a worktree on `huy/dev-2500-bar-chart-template`;
+  `HtmlEditMarkerAudit` and the board editor's schemas exist only on that
+  line of branches, so they are named in a note rather than as members. A
+  session mapping a feature it is building on a branch would be refused for
+  exactly the files it is adding.
 
 ---
 
