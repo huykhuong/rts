@@ -499,3 +499,27 @@ func TestFormatSymbolMatches_UsesRubySeparators(t *testing.T) {
 		})
 	}
 }
+
+func TestReadToolsAreMarkedReadOnly(t *testing.T) {
+	// Claude Code refuses an MCP tool in plan mode unless it declares
+	// readOnlyHint. Without the marks every RTS tool failed there with
+	// "Cannot call ... while in plan mode".
+	out := captureStdout(t, func() { handleToolsList(json.RawMessage("1")) })
+
+	var decoded struct {
+		Result struct {
+			Tools []Tool `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatalf("tools/list is not valid JSON: %v", err)
+	}
+
+	for _, tool := range decoded.Result.Tools {
+		writes := tool.Name == "record_insight" || tool.Name == "record_feature"
+		readOnly := tool.Annotations != nil && tool.Annotations.ReadOnlyHint
+		if readOnly == writes {
+			t.Errorf("%s: readOnlyHint = %v, want %v", tool.Name, readOnly, !writes)
+		}
+	}
+}
