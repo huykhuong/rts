@@ -27,7 +27,9 @@ var scriptExtensions = map[string]bool{
 	".js": true, ".jsx": true, ".mjs": true, ".cjs": true,
 }
 
-func isScript(path string) bool {
+// IsScript reports whether path is a TypeScript or JavaScript source file the
+// index reads.
+func IsScript(path string) bool {
 	return scriptExtensions[filepath.Ext(path)] && !strings.HasSuffix(path, ".d.ts")
 }
 
@@ -167,6 +169,7 @@ func methodName(trimmed string) string {
 type tsLexer struct {
 	inBlockComment bool
 	inString       byte // the quote character, or 0
+	sawOpen        bool // a { outside strings and comments has been seen
 }
 
 // braces returns the net change in brace depth over one line.
@@ -196,6 +199,7 @@ func (l *tsLexer) braces(line string) int {
 			l.inString = c
 		case c == '{':
 			delta++
+			l.sawOpen = true
 		case c == '}':
 			delta--
 		}
@@ -205,4 +209,51 @@ func (l *tsLexer) braces(line string) int {
 		l.inString = 0
 	}
 	return delta
+}
+
+// ScriptSpan returns the index of the last line of the declaration that
+// starts at lines[start]: the line where its braces close again, or, for a
+// declaration with no body, the line that ends it with a semicolon. A
+// declaration whose end cannot be found runs to the end of the file.
+func ScriptSpan(lines []string, start int) int {
+	var lex tsLexer
+	depth := 0
+	for i := start; i < len(lines); i++ {
+		depth += lex.braces(lines[i])
+		if lex.sawOpen && depth <= 0 {
+			return i
+		}
+		if !lex.sawOpen && depth == 0 && lex.inString == 0 && !lex.inBlockComment && endsStatement(lines, i) {
+			return i
+		}
+	}
+	return len(lines) - 1
+}
+
+// endsStatement reports whether a bodiless declaration ends on lines[i]:
+// with a semicolon, or — in code written without them — on a line that does
+// not leave an expression open and is not continued by the next.
+func endsStatement(lines []string, i int) bool {
+	line := strings.TrimSpace(lines[i])
+	if strings.HasSuffix(line, ";") {
+		return true
+	}
+	for _, open := range []string{"=", "(", "[", ",", "=>", "&&", "||", "?", ":", "+", "-", "*", "/", "|", "&", "<"} {
+		if strings.HasSuffix(line, open) {
+			return false
+		}
+	}
+	for j := i + 1; j < len(lines); j++ {
+		next := strings.TrimSpace(lines[j])
+		if next == "" {
+			continue
+		}
+		for _, cont := range []string{".", "?", ":", "+", "-", "*", "/", "|", "&", ")", "]", ">", "=>"} {
+			if strings.HasPrefix(next, cont) {
+				return false
+			}
+		}
+		break
+	}
+	return true
 }
