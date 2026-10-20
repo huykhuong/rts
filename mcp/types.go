@@ -13,9 +13,18 @@ type BaseMessage struct {
 // Tool represents a capability we are advertising to Claude.
 // We use this to tell Claude: "Hey, I have a tool called X, and here is how you use it."
 type Tool struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	InputSchema InputSchema `json:"inputSchema"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	InputSchema InputSchema      `json:"inputSchema"`
+	Annotations *ToolAnnotations `json:"annotations,omitempty"`
+}
+
+// ToolAnnotations are the MCP hints a client reads to decide when a tool may
+// run. Claude Code refuses every MCP tool in plan mode unless it declares
+// readOnlyHint — which, with no annotations at all, made RTS unusable in plan
+// mode and in any read-only session.
+type ToolAnnotations struct {
+	ReadOnlyHint bool `json:"readOnlyHint"`
 }
 
 // InputSchema uses JSON Schema format to define the arguments our tool requires.

@@ -315,11 +315,21 @@ func handleToolsList(id json.RawMessage) {
 		},
 	}
 
+	tools := []Tool{projectMapTool, touchpointsTool, skeletonTool, methodTool, fileTool, findSymbolTool, recordInsightTool, recordFeatureTool, statsTool, searchTool, listTool}
+
+	// Every tool but the two that write to .rts/ only reads. Marking them is
+	// what lets them run in plan mode, where reading the code is the job.
+	for i := range tools {
+		if tools[i].Name != "record_insight" && tools[i].Name != "record_feature" {
+			tools[i].Annotations = &ToolAnnotations{ReadOnlyHint: true}
+		}
+	}
+
 	response := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      id,
 		"result": map[string]interface{}{
-			"tools": []Tool{projectMapTool, touchpointsTool, skeletonTool, methodTool, fileTool, findSymbolTool, recordInsightTool, recordFeatureTool, statsTool, searchTool, listTool},
+			"tools": tools,
 		},
 	}
 
