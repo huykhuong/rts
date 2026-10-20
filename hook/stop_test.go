@@ -261,7 +261,7 @@ func TestStopReason_AnUpToDateMapCoversItsFiles(t *testing.T) {
 			{Ref: "test/models/board_template_test.rb"},
 		},
 	}
-	if problems := graph.Resolve(p.root, idx, &f); len(problems) > 0 {
+	if problems := graph.Resolve(p.root, "", idx, &f); len(problems) > 0 {
 		t.Fatalf("Resolve: %v", problems)
 	}
 	db, err := graph.Open(p.root)

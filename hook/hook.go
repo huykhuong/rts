@@ -136,7 +136,7 @@ func SessionContext(input PreToolUseInput, now time.Time) string {
 
 	// The brief replays recorded findings straight into the new session, so
 	// it is scrubbed like any MCP response before it gets there.
-	text := brief.Render(root, brief.Options{Now: now, Drift: drift, Refreshing: refreshing})
+	text := brief.Render(root, brief.Options{Now: now, Drift: drift, Refreshing: refreshing, Checkout: index.CheckoutRoot(cwd)})
 	return secrets.NewRedactor(cwd, root).Redact(text)
 }
 

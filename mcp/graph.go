@@ -51,7 +51,7 @@ func handleRecordFeature(args map[string]json.RawMessage, id json.RawMessage, ro
 		return
 	}
 
-	if problems := graph.Resolve(root, idx, &f); len(problems) > 0 {
+	if problems := graph.Resolve(root, checkoutRoot, idx, &f); len(problems) > 0 {
 		var buf strings.Builder
 		fmt.Fprintf(&buf, "Nothing was saved. Fix these and send the whole map again:\n")
 		for _, p := range problems {
@@ -123,7 +123,7 @@ func handleTouchpoints(args map[string]json.RawMessage, id json.RawMessage, root
 	// a feature name still answers.
 	idx, _ := indexCache.Get()
 
-	text, err := graph.Touchpoints(db, root, idx, name, depth)
+	text, err := graph.Touchpoints(db, root, checkoutRoot, idx, name, depth)
 	if err != nil {
 		sendError(id, fmt.Sprintf("Could not read the graph: %v", err))
 		return

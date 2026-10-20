@@ -77,7 +77,7 @@ func boardTemplates() Feature {
 func saved(t *testing.T, db *sql.DB, root string, idx *index.IndexFile, f Feature) {
 	t.Helper()
 
-	if problems := Resolve(root, idx, &f); len(problems) > 0 {
+	if problems := Resolve(root, "", idx, &f); len(problems) > 0 {
 		t.Fatalf("Resolve: %v", problems)
 	}
 	if _, err := Record(db, f); err != nil {
@@ -100,7 +100,7 @@ func TestResolve_FillsPathsAndFingerprintsFromTheCode(t *testing.T) {
 	root, idx := project(t)
 	f := boardTemplates()
 
-	if problems := Resolve(root, idx, &f); len(problems) > 0 {
+	if problems := Resolve(root, "", idx, &f); len(problems) > 0 {
 		t.Fatalf("a valid map was refused: %v", problems)
 	}
 
@@ -127,7 +127,7 @@ func TestResolve_ListsEveryProblemAtOnce(t *testing.T) {
 	)
 	f.Edges = append(f.Edges, Edge{Src: "Board", Dst: "BoardTemplate", Kind: "owns"})
 
-	problems := Resolve(root, idx, &f)
+	problems := Resolve(root, "", idx, &f)
 	joined := strings.Join(problems, "\n")
 
 	for _, want := range []string{
@@ -148,19 +148,19 @@ func TestResolve_RefusesProtectedFilesAsMembersAndInNotes(t *testing.T) {
 
 	f := boardTemplates()
 	f.Members = append(f.Members, Member{Ref: "config/master.key"})
-	if problems := Resolve(root, idx, &f); !strings.Contains(strings.Join(problems, "\n"), "protected credential file") {
+	if problems := Resolve(root, "", idx, &f); !strings.Contains(strings.Join(problems, "\n"), "protected credential file") {
 		t.Errorf("config/master.key was accepted as a member: %v", problems)
 	}
 
 	f = boardTemplates()
 	f.Notes = []string{"Signing uses the key in config/master.key."}
-	if problems := Resolve(root, idx, &f); !strings.Contains(strings.Join(problems, "\n"), `names "config/master.key"`) {
+	if problems := Resolve(root, "", idx, &f); !strings.Contains(strings.Join(problems, "\n"), `names "config/master.key"`) {
 		t.Errorf("a note naming config/master.key was accepted: %v", problems)
 	}
 
 	f = boardTemplates()
 	f.Notes = []string{"Reads ENV vars for the S3 bucket, e.g. in production."}
-	if problems := Resolve(root, idx, &f); len(problems) > 0 {
+	if problems := Resolve(root, "", idx, &f); len(problems) > 0 {
 		t.Errorf("an ordinary note was refused: %v", problems)
 	}
 }
@@ -181,7 +181,7 @@ func TestTouchpoints_FeatureNameReturnsTheMap(t *testing.T) {
 	db := open_(t, root)
 	saved(t, db, root, idx, boardTemplates())
 
-	text, err := Touchpoints(db, root, idx, "Board Templates", 1)
+	text, err := Touchpoints(db, root, "", idx, "Board Templates", 1)
 	if err != nil {
 		t.Fatalf("Touchpoints: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestTouchpoints_MarksMembersEditedSinceTheMapWasWritten(t *testing.T) {
 
 	write(t, root, "app/models/board_template.rb", "class BoardTemplate\n  def apply; end\n  def preview; end\nend\n")
 
-	text, err := Touchpoints(db, root, idx, "board templates", 1)
+	text, err := Touchpoints(db, root, "", idx, "board templates", 1)
 	if err != nil {
 		t.Fatalf("Touchpoints: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestTouchpoints_ClassNameFollowsConnectionsAcrossFeatures(t *testing.T) {
 		Edges:   []Edge{{Src: "Board", Dst: "Admin::Template", Kind: "uses"}},
 	})
 
-	one, err := Touchpoints(db, root, idx, "BoardTemplatesController", 1)
+	one, err := Touchpoints(db, root, "", idx, "BoardTemplatesController", 1)
 	if err != nil {
 		t.Fatalf("Touchpoints: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestTouchpoints_ClassNameFollowsConnectionsAcrossFeatures(t *testing.T) {
 		t.Errorf("depth 1 went two steps out:\n%s", one)
 	}
 
-	two, err := Touchpoints(db, root, idx, "BoardTemplate", 2)
+	two, err := Touchpoints(db, root, "", idx, "BoardTemplate", 2)
 	if err != nil {
 		t.Fatalf("Touchpoints: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestTouchpoints_MissNamesWhatIsMapped(t *testing.T) {
 	db := open_(t, root)
 	saved(t, db, root, idx, boardTemplates())
 
-	text, err := Touchpoints(db, root, idx, "billing", 1)
+	text, err := Touchpoints(db, root, "", idx, "billing", 1)
 	if err != nil {
 		t.Fatalf("Touchpoints: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestRecord_ReplacesTheMapAndKeepsTheOldOne(t *testing.T) {
 		Summary: "Templates now only cover the job.",
 		Members: []Member{{Ref: "CreateBoardFromTemplateJob", Role: "job"}},
 	}
-	if problems := Resolve(root, idx, &rewrite); len(problems) > 0 {
+	if problems := Resolve(root, "", idx, &rewrite); len(problems) > 0 {
 		t.Fatalf("Resolve: %v", problems)
 	}
 	replaced, err := Record(db, rewrite)
@@ -291,7 +291,7 @@ func TestRecord_ReplacesTheMapAndKeepsTheOldOne(t *testing.T) {
 		t.Error("rewriting an existing feature was not reported as a replacement")
 	}
 
-	text, _ := Touchpoints(db, root, idx, "board templates", 1)
+	text, _ := Touchpoints(db, root, "", idx, "board templates", 1)
 	if strings.Contains(text, "BoardTemplatesController") || strings.Contains(text, "Templates are copied") {
 		t.Errorf("the old map's members or notes survived the replacement:\n%s", text)
 	}
@@ -329,7 +329,7 @@ func TestRecord_ConcurrentWritersBothLand(t *testing.T) {
 
 			f := boardTemplates()
 			f.Name = "feature " + string(rune('a'+i))
-			if problems := Resolve(root, idx, &f); len(problems) > 0 {
+			if problems := Resolve(root, "", idx, &f); len(problems) > 0 {
 				t.Errorf("Resolve: %v", problems)
 				return
 			}
@@ -345,7 +345,7 @@ func TestRecord_ConcurrentWritersBothLand(t *testing.T) {
 	}
 
 	db := open_(t, root)
-	features, err := Summaries(db, root)
+	features, err := Summaries(db, root, "")
 	if err != nil {
 		t.Fatalf("Summaries: %v", err)
 	}
@@ -384,7 +384,7 @@ func TestPrune_DropsWhatTheCodeNoLongerHas(t *testing.T) {
 		t.Errorf("expected 2 members, 1 edge, 1 feature dropped; got %+v", res)
 	}
 
-	features, _ := Summaries(db, root)
+	features, _ := Summaries(db, root, "")
 	if len(features) != 1 || features[0].Name != "board templates" || features[0].Members != 3 {
 		t.Errorf("board templates should survive with 3 members; got %+v", features)
 	}
@@ -415,7 +415,105 @@ func TestOpen_UpgradesAVersionOneGraphInPlace(t *testing.T) {
 	if err := MarkAsked(upgraded, "s", []string{"board_template"}, time.Now()); err != nil {
 		t.Errorf("stop_asks is missing after the upgrade: %v", err)
 	}
-	if features, _ := Summaries(upgraded, root); len(features) != 1 {
+	if features, _ := Summaries(upgraded, root, ""); len(features) != 1 {
 		t.Errorf("the upgrade lost the feature maps: %+v", features)
+	}
+}
+
+// withWorktree adds a linked worktree to a project the way git records one,
+// holding a class the main checkout does not have.
+func withWorktree(t *testing.T, root string) string {
+	t.Helper()
+
+	wt := t.TempDir()
+	write(t, wt, "app/models/bar_chart.rb", "class BarChart\nend\n")
+	write(t, wt, "app/models/board_template.rb", "class BoardTemplate\n  def bars; end\nend\n")
+	write(t, wt, ".git", "gitdir: "+filepath.Join(root, ".git", "worktrees", "wt")+"\n")
+	write(t, root, ".git/worktrees/wt/gitdir", filepath.Join(wt, ".git")+"\n")
+	return wt
+}
+
+func barChart() Feature {
+	return Feature{
+		Name:    "bar chart",
+		Summary: "A bar chart board template.",
+		Members: []Member{{Ref: "BarChart", Role: "model"}, {Ref: "BoardTemplate", Role: "model"}},
+		Edges:   []Edge{{Src: "BarChart", Dst: "BoardTemplate", Kind: "uses"}},
+	}
+}
+
+func TestResolve_FindsBranchOnlyCodeInTheSessionsCheckout(t *testing.T) {
+	root, idx := project(t)
+	wt := withWorktree(t, root)
+
+	f := barChart()
+	if problems := Resolve(root, "", idx, &f); !strings.Contains(strings.Join(problems, "\n"), `"BarChart": no class or module`) {
+		t.Fatalf("without the worktree, BarChart should not resolve: %v", problems)
+	}
+
+	f = barChart()
+	if problems := Resolve(root, wt, idx, &f); len(problems) > 0 {
+		t.Fatalf("BarChart exists in the session's worktree and should resolve: %v", problems)
+	}
+	if f.Members[0].Path != "app/models/bar_chart.rb" || f.Members[0].Fingerprint == "" {
+		t.Errorf("branch-only member was not located and fingerprinted: %+v", f.Members[0])
+	}
+	if f.refPaths["BarChart"] != "app/models/bar_chart.rb" {
+		t.Errorf("the edge end's file was not recorded: %v", f.refPaths)
+	}
+}
+
+func TestTouchpoints_JudgesChangesAgainstTheReadersCheckout(t *testing.T) {
+	root, idx := project(t)
+	wt := withWorktree(t, root)
+	db := open_(t, root)
+
+	f := barChart()
+	if problems := Resolve(root, wt, idx, &f); len(problems) > 0 {
+		t.Fatalf("Resolve: %v", problems)
+	}
+	if _, err := Record(db, f); err != nil {
+		t.Fatal(err)
+	}
+
+	fromWorktree, _ := Touchpoints(db, root, wt, idx, "bar chart", 1)
+	if strings.Contains(fromWorktree, "[changed]") {
+		t.Errorf("the session that wrote the map sees its own files as changed:\n%s", fromWorktree)
+	}
+	fromMain, _ := Touchpoints(db, root, "", idx, "bar chart", 1)
+	if !strings.Contains(fromMain, "app/models/board_template.rb  (model)  [changed]") {
+		t.Errorf("the main checkout's BoardTemplate differs from the branch's and should be marked:\n%s", fromMain)
+	}
+}
+
+func TestPrune_KeepsBranchWorkWhileItsWorktreeExists(t *testing.T) {
+	root, idx := project(t)
+	wt := withWorktree(t, root)
+	db := open_(t, root)
+
+	f := barChart()
+	if problems := Resolve(root, wt, idx, &f); len(problems) > 0 {
+		t.Fatalf("Resolve: %v", problems)
+	}
+	if _, err := Record(db, f); err != nil {
+		t.Fatal(err)
+	}
+
+	// The main index never has BarChart. While the worktree holds it, the
+	// map keeps it.
+	if res, err := Prune(db, root, idx); err != nil || res.Members+res.Edges+res.Features != 0 {
+		t.Fatalf("branch-only code was pruned while its worktree exists: %+v, %v", res, err)
+	}
+
+	// The worktree is removed unmerged: BarChart is gone everywhere.
+	if err := os.RemoveAll(wt); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Prune(db, root, idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Members != 1 || res.Edges != 1 {
+		t.Errorf("expected BarChart's member and edge dropped once its worktree is gone; got %+v", res)
 	}
 }

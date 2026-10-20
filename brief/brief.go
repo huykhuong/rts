@@ -58,6 +58,10 @@ type Options struct {
 	// hook checks drift itself, to decide whether to start a reindex.
 	Drift *index.Drift
 
+	// Checkout is the top of the session's own checkout, which a feature
+	// map's "changed since" is judged against. Empty means the root.
+	Checkout string
+
 	// Refreshing says a reindex was started in the background for this
 	// session. The map below it is then the previous run's, and the brief
 	// says so instead of telling the reader to do what is already happening.
@@ -85,7 +89,7 @@ func Render(projectRoot string, opts Options) string {
 		store = &insight.Store{}
 	}
 	findings := insight.Live(projectRoot, store)
-	features := loadFeatures(projectRoot)
+	features := loadFeatures(projectRoot, opts.Checkout)
 
 	if mapErr != nil && len(findings) == 0 && len(features) == 0 {
 		return ""
@@ -159,14 +163,14 @@ func renderMap(buf *strings.Builder, pm *index.ProjectMap) {
 
 // loadFeatures reads the feature list without ever creating a graph: the brief
 // runs in every project, and most have never mapped anything.
-func loadFeatures(projectRoot string) []graph.Summary {
+func loadFeatures(projectRoot, checkout string) []graph.Summary {
 	db, err := graph.OpenExisting(projectRoot)
 	if err != nil {
 		return nil
 	}
 	defer func() { _ = db.Close() }()
 
-	features, err := graph.Summaries(db, projectRoot)
+	features, err := graph.Summaries(db, projectRoot, checkout)
 	if err != nil {
 		return nil
 	}

@@ -230,6 +230,7 @@ func runGraph(args []string) {
 		os.Exit(1)
 	}
 	root := index.ResolveRoot(cwd)
+	checkout := index.CheckoutRoot(cwd)
 
 	db, err := graph.OpenExisting(root)
 	if err != nil {
@@ -240,7 +241,7 @@ func runGraph(args []string) {
 
 	if len(args) > 0 {
 		idx, _ := index.Load(root)
-		text, err := graph.Touchpoints(db, root, idx, strings.Join(args, " "), 2)
+		text, err := graph.Touchpoints(db, root, checkout, idx, strings.Join(args, " "), 2)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[rts graph] error: %v\n", err)
 			os.Exit(1)
@@ -249,7 +250,7 @@ func runGraph(args []string) {
 		return
 	}
 
-	features, err := graph.Summaries(db, root)
+	features, err := graph.Summaries(db, root, checkout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[rts graph] error: %v\n", err)
 		os.Exit(1)

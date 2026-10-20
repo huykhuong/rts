@@ -2,8 +2,6 @@ package graph
 
 import (
 	"database/sql"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -32,8 +30,9 @@ func (c Coverage) Covers(rel string) bool {
 	return false
 }
 
-// Covered builds the coverage of every map in the graph.
-func Covered(db *sql.DB, projectRoot string) (Coverage, error) {
+// Covered builds the coverage of every map in the graph, judging each member
+// against the file in the session's own checkout.
+func Covered(db *sql.DB, projectRoot, checkout string) (Coverage, error) {
 	c := Coverage{files: map[string]bool{}}
 
 	rows, err := db.Query("SELECT path, fingerprint FROM members")
@@ -49,12 +48,12 @@ func Covered(db *sql.DB, projectRoot string) (Coverage, error) {
 		}
 
 		if fp == "" {
-			if info, err := os.Stat(filepath.Join(projectRoot, path)); err == nil && info.IsDir() {
+			if existsIn(projectRoot, checkout, path) {
 				c.dirs = append(c.dirs, path)
 			}
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(projectRoot, path))
+		data, err := readIn(projectRoot, checkout, path)
 		if err == nil && index.Fingerprint(data) == fp {
 			c.files[path] = true
 		}

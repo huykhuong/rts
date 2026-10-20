@@ -3,8 +3,6 @@ package graph
 import (
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -80,8 +78,9 @@ type Summary struct {
 	UpdatedAt time.Time
 }
 
-// Summaries lists every feature, most recently updated first.
-func Summaries(db *sql.DB, projectRoot string) ([]Summary, error) {
+// Summaries lists every feature, most recently updated first. checkout is
+// the reader's own checkout, which "changed" is judged against.
+func Summaries(db *sql.DB, projectRoot, checkout string) ([]Summary, error) {
 	rows, err := db.Query("SELECT id FROM features ORDER BY updated_at DESC, name")
 	if err != nil {
 		return nil, err
@@ -106,7 +105,7 @@ func Summaries(db *sql.DB, projectRoot string) ([]Summary, error) {
 		out = append(out, Summary{
 			Name:      f.Name,
 			Members:   len(f.Members),
-			Changed:   len(changedMembers(projectRoot, f.Members)),
+			Changed:   len(changedMembers(projectRoot, checkout, f.Members)),
 			UpdatedAt: f.UpdatedAt,
 		})
 	}
@@ -117,13 +116,16 @@ func Summaries(db *sql.DB, projectRoot string) ([]Summary, error) {
 // map was written. Hashed from the file on disk, not read from
 // fingerprints.json: that file is only as fresh as the last `rts index`, and
 // a warning that lags the code by a day is the one that gets trusted wrongly.
-func changedMembers(projectRoot string, members []Member) map[string]bool {
+//
+// The file is read from the reader's checkout when it has one, so a session
+// in a worktree is told about its own branch's code, not the main checkout's.
+func changedMembers(projectRoot, checkout string, members []Member) map[string]bool {
 	changed := map[string]bool{}
 	for _, m := range members {
 		if m.Fingerprint == "" {
 			continue // a directory: nothing to hash
 		}
-		data, err := os.ReadFile(filepath.Join(projectRoot, m.Path))
+		data, err := readIn(projectRoot, checkout, m.Path)
 		if err != nil || index.Fingerprint(data) != m.Fingerprint {
 			changed[m.Ref] = true
 		}
@@ -136,7 +138,7 @@ func changedMembers(projectRoot string, members []Member) map[string]bool {
 // A feature name returns that feature's map. A class or path returns every
 // feature it belongs to, then what it connects to within depth steps across
 // all maps — the "what else touches this" answer no single map holds.
-func Touchpoints(db *sql.DB, projectRoot string, idx *index.IndexFile, query string, depth int) (string, error) {
+func Touchpoints(db *sql.DB, projectRoot, checkout string, idx *index.IndexFile, query string, depth int) (string, error) {
 	query = strings.TrimSpace(query)
 	if depth < 1 {
 		depth = 1
@@ -153,7 +155,7 @@ func Touchpoints(db *sql.DB, projectRoot string, idx *index.IndexFile, query str
 			return "", err
 		}
 		var buf strings.Builder
-		renderFeature(&buf, projectRoot, f)
+		renderFeature(&buf, projectRoot, checkout, f)
 		return buf.String(), nil
 	}
 	if err != sql.ErrNoRows {
@@ -161,10 +163,9 @@ func Touchpoints(db *sql.DB, projectRoot string, idx *index.IndexFile, query str
 	}
 
 	ref := query
-	if idx != nil {
-		if resolved, _, err := resolveRef(projectRoot, idx, query); err == nil {
-			ref = resolved
-		}
+	r := &resolver{root: projectRoot, checkout: checkout, idx: idx}
+	if resolved, _, err := r.resolve(query); err == nil {
+		ref = resolved
 	}
 
 	features, err := featuresTouching(db, ref)
@@ -287,8 +288,8 @@ func missText(db *sql.DB, query string) (string, error) {
 // renderFeature prints a map with its structure first and its notes last,
 // under the same caveat the brief puts on recorded findings: the structure
 // was checked against the code when it was written, the notes never were.
-func renderFeature(buf *strings.Builder, projectRoot string, f Feature) {
-	changed := changedMembers(projectRoot, f.Members)
+func renderFeature(buf *strings.Builder, projectRoot, checkout string, f Feature) {
+	changed := changedMembers(projectRoot, checkout, f.Members)
 
 	fmt.Fprintf(buf, "Feature: %s\n", f.Name)
 	fmt.Fprintf(buf, "%s\n", f.Summary)

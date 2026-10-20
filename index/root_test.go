@@ -182,3 +182,23 @@ func TestResolveRoot_RealGitWorktree(t *testing.T) {
 		t.Errorf("ResolveRoot(%s) = %s, want main root %s", wtRoot, gotResolved, wantResolved)
 	}
 }
+
+func TestCheckouts_ListsTheMainCheckoutAndLiveWorktrees(t *testing.T) {
+	root := t.TempDir()
+	live, gone := t.TempDir(), filepath.Join(t.TempDir(), "removed")
+
+	for name, dir := range map[string]string{"live": live, "gone": gone} {
+		rec := filepath.Join(root, ".git", "worktrees", name)
+		if err := os.MkdirAll(rec, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(rec, "gitdir"), []byte(filepath.Join(dir, ".git")+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := Checkouts(root)
+	if len(got) != 2 || got[0] != root || got[1] != live {
+		t.Errorf("Checkouts = %v, want [%s %s]", got, root, live)
+	}
+}
