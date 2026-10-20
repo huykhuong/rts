@@ -316,3 +316,10 @@ func CheckDrift(projectRoot string) (Drift, error) {
 
 	return drift, nil
 }
+
+// Fingerprint is the content hash the index records for a file, exported so
+// the graph can stamp a feature map with the same hash and tell later whether
+// the files under it have moved.
+func Fingerprint(data []byte) string {
+	return fingerprint(data)
+}

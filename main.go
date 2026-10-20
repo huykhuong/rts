@@ -8,6 +8,7 @@ import (
 
 	"rts/brief"
 	"rts/doctor"
+	"rts/graph"
 	"rts/hook"
 	"rts/index"
 	"rts/insight"
@@ -67,6 +68,13 @@ func main() {
 		return
 	}
 
+	// `rts graph` — the feature maps sessions have saved. graph.db is SQLite
+	// and cannot be read in an editor, so this is how a person looks at it.
+	if len(os.Args) > 1 && os.Args[1] == "graph" {
+		runGraph(os.Args[2:])
+		return
+	}
+
 	// If no arguments, try reading from Stdin (allows piping like: cat user.rb | rts)
 	stat, _ := os.Stdin.Stat()
 	if (stat.Mode() & os.ModeCharDevice) == 0 {
@@ -85,6 +93,7 @@ func main() {
 		fmt.Println("  rts brief          Print what a new session is handed at startup")
 		fmt.Println("  rts insights       List the findings recorded for this project")
 		fmt.Println("  rts insights rm ID Remove a finding that turned out to be wrong")
+		fmt.Println("  rts graph [NAME]   List the mapped features, or print one")
 		fmt.Println("  rts doctor         Health check")
 		fmt.Println("  rts mcp            Run the MCP server (invoked by Claude Code)")
 		fmt.Println("  rts hook           Run the hook (invoked by Claude Code)")
@@ -171,6 +180,8 @@ func runIndex() {
 		fail(err)
 	}
 
+	pruneGraph(root, symbols)
+
 	// Fingerprints before the map: the map's own staleness warning is read
 	// against them, so an index that wrote one without the other would
 	// report itself permanently undetectable.
@@ -188,6 +199,71 @@ func runIndex() {
 	}
 	if err := index.WriteMap(root, projectMap); err != nil {
 		fmt.Fprintf(os.Stderr, "[rts index] could not write project map: %v\n", err)
+	}
+}
+
+// pruneGraph drops what the new index no longer contains from the feature
+// maps. A failure is reported and nothing more: the index the run exists to
+// write has already been written.
+func pruneGraph(root string, symbols []index.Symbol) {
+	db, err := graph.OpenExisting(root)
+	if err != nil {
+		return // nothing mapped here
+	}
+	defer func() { _ = db.Close() }()
+
+	res, err := graph.Prune(db, root, &index.IndexFile{Symbols: symbols})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[rts index] could not prune the feature graph: %v\n", err)
+		return
+	}
+	if res.Members+res.Edges+res.Features > 0 {
+		fmt.Fprintf(os.Stderr, "[rts index] feature graph: dropped %d member(s), %d edge(s) and %d feature(s) for code that no longer exists\n",
+			res.Members, res.Edges, res.Features)
+	}
+}
+
+func runGraph(args []string) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[rts graph] error: %v\n", err)
+		os.Exit(1)
+	}
+	root := index.ResolveRoot(cwd)
+
+	db, err := graph.OpenExisting(root)
+	if err != nil {
+		fmt.Println("No features are mapped in this project yet.")
+		return
+	}
+	defer func() { _ = db.Close() }()
+
+	if len(args) > 0 {
+		idx, _ := index.Load(root)
+		text, err := graph.Touchpoints(db, root, idx, strings.Join(args, " "), 2)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[rts graph] error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(cliRedactor().Redact(text))
+		return
+	}
+
+	features, err := graph.Summaries(db, root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[rts graph] error: %v\n", err)
+		os.Exit(1)
+	}
+	if len(features) == 0 {
+		fmt.Println("No features are mapped in this project yet.")
+		return
+	}
+	for _, f := range features {
+		line := fmt.Sprintf("%-40s %3d members  mapped %s", f.Name, f.Members, f.UpdatedAt.Local().Format("2006-01-02"))
+		if f.Changed > 0 {
+			line += fmt.Sprintf("  (%d changed since)", f.Changed)
+		}
+		fmt.Println(cliRedactor().Redact(line))
 	}
 }
 

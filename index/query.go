@@ -110,3 +110,9 @@ func lastSegment(qualified string) string {
 	}
 	return qualified
 }
+
+// QualifiedName is a symbol's full "A::B::C" name, however the definition
+// spelled it.
+func QualifiedName(sym Symbol) string {
+	return qualifiedName(sym)
+}
