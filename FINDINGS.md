@@ -316,27 +316,41 @@ notes — and every later session gets it back in one call. The steroidd map
 built from that Explore report reads back in **6,348 characters, about 1,600
 tokens**.
 
-**It did not save anything yet.** Two fresh plan-mode sessions on the same
-prompt ("list every file I need to change to add a `bar_chart` template"),
-one with the map and one without, on 2026-10-20:
+**The first comparison saved nothing.** Two fresh plan-mode sessions on the
+same prompt ("list every file I need to change to add a `bar_chart`
+template"), one with the map and one without: 48 turns and $1.25 with it, 39
+turns and $1.09 without, all 12 required items found by both. The session
+with the map read it, said "useful map, but its notes are unverified — let me
+check the key claims against the code", and checked everything. The map
+gave it no reason not to: it labelled itself as notes to confirm, and two of
+its notes named code that exists only on a branch, so on `dev` they looked
+wrong.
 
-| | Without the map | With the map |
+Two changes followed. The map now says what its structure rests on — every
+name resolved to real code when it was saved, and an unchanged fingerprint
+means the files are byte-identical since — and keeps "not verified" on the
+notes alone. And the steroidd map was rewritten without the branch-only
+claims. Then three pairs, alternating which ran first:
+
+| Pair | With the map | Without the map |
 |---|---|---|
-| Turns | 39 | 48 |
-| Uncached input + cache writes (main thread) | 163k | 258k |
-| Cost | $1.09 | $1.25 |
-| Required items found (of 12 on `dev`) | 12 | 12 |
+| 1 | 23 turns, $0.56 | 19 turns, $1.92 (sent an Explore agent) |
+| 2 | 10 turns, $0.32 | 39 turns, $1.04 |
+| 3 | 23 turns, $0.68 | 46 turns, $1.05 |
+| Mean | 18.7 turns, $0.52 | 34.7 turns, $1.34 |
 
-The session with the map read it first, said "useful map, but its notes are
-unverified — let me check the key claims against the code", and then checked
-everything. Two notes did not hold on `dev` (they named code only on a
-branch), which is exactly what a check is for. The labels RTS puts on a map
-— notes "not verified", "confirm before relying" — invite that, and a task
-that asks for line numbers needs the lines read regardless. One run each, so
-the spread is unmeasured; an earlier pair differed by $0.65 on whether the
-session happened to start an Explore agent.
+Every run with the map was cheaper than every run without it, and every run
+found all 12 required items (scored by matching each item's file or registry
+name in the answer). Against the two runs without an Explore agent, the map
+roughly halves the cost ($0.52 against $1.05) and the uncached input (36k
+against 70k tokens). It did not stop the session reading: runs with the map
+still made 6 to 18 tool calls after it, checking the specific lines they
+quoted. That is the right amount of checking; the first comparison's was
+not. Three pairs on one task is a small sample, and the prompt asked for a
+list rather than an edit, so "tokens before the first edit" is measured here
+as tokens for the whole answer.
 
-The same pair is also the first measurement of RTS in plan mode, because it
+The first pair was also the first measurement of RTS in plan mode, because it
 did not work there before: every RTS tool was refused ("Cannot call
 mcp__rts__… while in plan mode") until the read-only ones declared MCP's
 `readOnlyHint`. The session without the map then answered fully in 39 turns
@@ -391,7 +405,7 @@ in an editor.
 
 - **Nothing asks a session to save a map.** That is phase 2 of the design (a
   `Stop` hook that asks once per area when a session explored code no map
-  covers), and it waits on the phase 1 measurement. Until then maps are saved
+  covers), which the comparison above now justifies building. Until then maps are saved
   when a session is told to, or decides to — the same weakness that left
   steroidd with seven findings in two weeks.
 - **No edges are read off the code.** Every edge is a session's claim, checked
