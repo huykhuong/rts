@@ -259,7 +259,7 @@ func handleToolsList(id json.RawMessage) {
 		Description: "Get the map of a feature — the classes and files that make it up and how they connect — in one call, instead of exploring the codebase to work it out. " +
 			"Call this BEFORE sending an Explore agent or reading around to understand a feature: if an earlier session mapped it, this answers in a few hundred tokens. " +
 			"Pass a feature name (the mapped features are listed at session start and in project_map) or a class name; a class returns the features it belongs to and what it connects to. " +
-			"Members marked [changed] were edited after the map was written: confirm the connections around them before relying on them.",
+			"Unchanged members and their connections can be used as they are: the names were checked against the code when the map was saved. Members marked [changed] were edited since; confirm the connections around them before relying on them.",
 		InputSchema: InputSchema{
 			Type: "object",
 			Properties: map[string]Property{

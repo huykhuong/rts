@@ -292,8 +292,22 @@ func renderFeature(buf *strings.Builder, projectRoot string, f Feature) {
 
 	fmt.Fprintf(buf, "Feature: %s\n", f.Name)
 	fmt.Fprintf(buf, "%s\n", f.Summary)
+	// Say what the structure rests on, separately from the notes. The first
+	// with/without-map comparison read the map, called it "useful, but its
+	// notes are unverified", and re-checked every class it named — paying for
+	// the exploration twice. The names were checked against the code when the
+	// map was saved, and an unchanged fingerprint means the files are
+	// byte-identical since; that is worth stating, and is all that is stated.
+	mapped := ""
 	if !f.UpdatedAt.IsZero() {
-		fmt.Fprintf(buf, "Mapped %s.\n", f.UpdatedAt.Local().Format("2006-01-02"))
+		mapped = " on " + f.UpdatedAt.Local().Format("2006-01-02")
+	}
+	if len(changed) == 0 {
+		fmt.Fprintf(buf, "Mapped%s by a session that read these files. Every name below resolved to real code when it was saved, "+
+			"and none of the files has changed since, so the members and connections can be used as they are.\n", mapped)
+	} else {
+		fmt.Fprintf(buf, "Mapped%s by a session that read these files. Every name below resolved to real code when it was saved; "+
+			"files marked [changed] have been edited since.\n", mapped)
 	}
 
 	outgoing := map[string][]Edge{}
