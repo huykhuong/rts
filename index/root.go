@@ -140,3 +140,15 @@ func parseGitdirFile(contents string) (string, bool) {
 	}
 	return "", false
 }
+
+// CheckoutRoot returns the top of the git checkout containing dir — the
+// worktree's own top for a linked worktree, not the main checkout — or dir
+// itself outside a repo. Paths a session touched are relative to this, while
+// the stores they are checked against live at ResolveRoot.
+func CheckoutRoot(dir string) string {
+	gitPath, ok := findDotGit(dir)
+	if !ok {
+		return dir
+	}
+	return filepath.Dir(gitPath)
+}

@@ -401,13 +401,40 @@ pinned to v1.59.0 because v1.60 requires Go 1.26), and the binary grew from
 4.3 MB to 10.9 MB. `rts graph` prints the maps, since the file cannot be read
 in an editor.
 
+### A Stop hook asks for the map
+
+Waiting for a session to call `record_feature` on its own does not work —
+`record_insight` had been available for two weeks and steroidd held seven
+notes. So RTS also answers Claude Code's `Stop` event, which fires when Claude
+finishes a reply. It reads the session's transcript, and its subagents',
+for the files read (`Read`, `view_file`, the skeleton and method views) and
+edited (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`); searches do not count,
+since a grep that matched forty files read none of them. Files an
+up-to-date map covers are dropped, unless the session edited them: in a
+worktree it changed its own copy while the map still matches the main
+checkout.
+
+What is left is grouped into **areas** by file name — extensions, a
+partial's underscore, `_test`/`_spec`, a Rails role suffix such as
+`_controller` or `_job`, and a deploy task's timestamp stripped, then made
+singular, with a generic name like `index.html.erb` taking its folder's — so
+`board_template.rb`, `board_templates_controller.rb` and
+`views/board_templates/index.html.erb` are one area. An area is asked about
+when the session read five or more of its files, or edited any. The ask
+blocks the stop once, names the areas, and tells the session to map only
+what it read; every area named is recorded in `stop_asks` and never asked
+about again in that session. It stays silent in plan mode (where
+`record_feature` is refused), on a stop the hook itself caused, without an
+index, and under `RTS_DISABLE=1`.
+
+Replayed against the steroidd session that built `bar_chart` (97 files
+touched, 27 edited), it would have asked once, at the end, naming 18 areas
+— 11 once the board template map existed. File-name areas split a
+cross-cutting feature into many, so the ask lists the eight largest and
+names the rest in a line, and says that one feature may span several areas.
+
 ### What it does not do yet
 
-- **Nothing asks a session to save a map.** That is phase 2 of the design (a
-  `Stop` hook that asks once per area when a session explored code no map
-  covers), which the comparison above now justifies building. Until then maps are saved
-  when a session is told to, or decides to — the same weakness that left
-  steroidd with seven findings in two weeks.
 - **No edges are read off the code.** Every edge is a session's claim, checked
   only for its ends existing. `has_many`, `include` and inheritance could come
   from the parser (phase 3).
