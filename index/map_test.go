@@ -372,6 +372,10 @@ func TestIsTestPath(t *testing.T) {
 		{"db/schema.rb", false},
 		{"scripts/latest_test_run.rb", false}, // "test" inside a name is not a test
 		{"lib/testing.rb", false},
+		{"tests/actions.test.ts", true},
+		{"src/client/ui/panel.spec.tsx", true},
+		{"src/__tests__/blobs.ts", true},
+		{"src/server/testing.ts", false},
 	}
 
 	for _, tc := range tests {

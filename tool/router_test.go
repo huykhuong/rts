@@ -42,7 +42,6 @@ func TestClassify_KnownPassthroughTypes(t *testing.T) {
 		"app/views/home/index.html.erb", // .erb is what filepath.Ext returns
 		"app/views/api/show.json.erb",
 		"app/assets/stylesheets/app.css",
-		"app/javascript/controllers/foo.js",
 		"config/database.yml",
 		"package.json",
 		"tsconfig.json",
@@ -268,5 +267,15 @@ func TestViewFile_LineCountInHeader(t *testing.T) {
 
 	if !strings.Contains(got, "3 lines") {
 		t.Errorf("passthrough header should report 3 lines:\n%s", got)
+	}
+}
+func TestClassify_Scripts(t *testing.T) {
+	for _, path := range []string{"app/javascript/controllers/foo.js", "src/server/blobs.ts", "src/client/ui/panel.tsx"} {
+		if got := classify(path); got != kindScript {
+			t.Errorf("classify(%q) = %v, want kindScript", path, got)
+		}
+	}
+	if got := classify("src/types/vendor.d.ts"); got == kindScript {
+		t.Error("a .d.ts declaration file should not get the script outline")
 	}
 }

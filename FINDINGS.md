@@ -256,7 +256,7 @@ it there in the meantime.
   or `content_element.rb` at all. A test file is something you open because
   the task took you there, not something you orient on. They stay in the
   layout table, where knowing the suite is large is worth something.
-- **TypeScript and JavaScript are indexed; only Ruby gets the code views.**
+- **TypeScript and JavaScript are indexed and get the code views.**
   `rts index` also reads `.ts`, `.tsx`, `.js` and their variants (not `.d.ts`,
   and not `dist/` or `app/assets/builds/`): top-level classes, interfaces,
   types, enums, functions and constants, and the methods inside a class —
@@ -264,9 +264,14 @@ it there in the meantime.
   Stimulus controller is, whose methods are filed under no class. Hangout, a
   TypeScript project with 425 such files, went from 0 symbols to 7,996, in
   under a second; steroidd gains about 2,400 from its JavaScript. So
-  `find_symbol` and named feature-map members work in both. The skeleton and
-  method views still read Ruby only, so the brief offers them on a Rails or
-  Ruby project and nowhere else. In a Go repo the symbol counts stay zero.
+  `find_symbol` and named feature-map members work in both.
+  `view_bionic_skeleton` (and `view_file` on a large script) outlines a
+  script from the same parse — imports, then every declaration with its line,
+  bodies cut at their opening brace, short interfaces and types shown whole:
+  Hangout's 6,647-line `main.ts` comes back in 13% of its characters.
+  `view_bionic_method` returns any declaration's full text, matched bare
+  (`put`) or by class (`BlobStore.put`), with every definition when a bare
+  name has several. A Go repo still has no symbols.
 
 ### What a real session found, and what it cost
 

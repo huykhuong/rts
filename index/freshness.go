@@ -107,7 +107,7 @@ func (d Drift) Describe() string {
 // tree the indexer skipped, so db/migrate counted toward the layout table and
 // toward nothing else, and the two stores described different codebases.
 func shouldIndex(path string) bool {
-	if filepath.Ext(path) != ".rb" && !isScript(path) {
+	if filepath.Ext(path) != ".rb" && !IsScript(path) {
 		return false
 	}
 	// skippedPathSuffixes are written with leading and trailing separators

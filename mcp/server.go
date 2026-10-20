@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -99,13 +100,13 @@ func handleInitialize(id json.RawMessage) {
 func handleToolsList(id json.RawMessage) {
 	skeletonTool := Tool{
 		Name:        "view_bionic_skeleton",
-		Description: "Use this tool to inspect the structural architecture (classes, modules, methods, macros) of a heavy Ruby or Rails file without reading its entire text contents. Highly recommended for token efficiency.",
+		Description: "Use this tool to inspect the structure of a heavy Ruby/Rails, TypeScript or JavaScript file without reading its entire text contents: classes, modules, methods and Rails macros in Ruby; imports, classes and their methods, functions, interfaces, types, enums and constants in TypeScript/JavaScript, each with its line number. Highly recommended for token efficiency.",
 		InputSchema: InputSchema{
 			Type: "object",
 			Properties: map[string]Property{
 				"path": {
 					Type:        "string",
-					Description: "The relative workspace path to the Ruby/Rails file.",
+					Description: "The relative workspace path to the Ruby, TypeScript or JavaScript file.",
 				},
 			},
 			Required: []string{"path"},
@@ -114,7 +115,7 @@ func handleToolsList(id json.RawMessage) {
 
 	methodTool := Tool{
 		Name:        "view_bionic_method",
-		Description: "Extract and read the full internal implementation body of one or more methods inside a Ruby or Rails file. Pass every method you need in a single call — the file is scanned once, so requesting 5 methods costs the same I/O as 1. Run view_bionic_skeleton first to find the correct method names.",
+		Description: "Extract and read the full body of one or more methods inside a Ruby/Rails, TypeScript or JavaScript file. In TypeScript/JavaScript any declaration works — a function, method, class, interface, type or constant — and a method can be named alone ('put') or with its class ('BlobStore.put'). Pass every name you need in a single call — the file is scanned once, so requesting 5 costs the same I/O as 1. Run view_bionic_skeleton first to find the correct names.",
 		InputSchema: InputSchema{
 			Type: "object",
 			Properties: map[string]Property{
@@ -134,7 +135,7 @@ func handleToolsList(id json.RawMessage) {
 
 	fileTool := Tool{
 		Name:        "view_file",
-		Description: "Read any project file. This is the canonical file-access tool — use this instead of the native Read tool or `cat`/`sed`/`head`/`tail` in Bash. Automatically returns a skeleton for large Ruby files (>=100 lines) and full content for everything else (small Ruby files, Markdown, JSON, ERB, YAML, JS/CSS, config files, etc.). For extracting specific Ruby method bodies from a skeleton, follow up with view_bionic_method.",
+		Description: "Read any project file. This is the canonical file-access tool — use this instead of the native Read tool or `cat`/`sed`/`head`/`tail` in Bash. Automatically returns a skeleton for large Ruby, TypeScript and JavaScript files (>=100 lines) and full content for everything else (small Ruby files, Markdown, JSON, ERB, YAML, JS/CSS, config files, etc.). For extracting specific method or function bodies from a skeleton, follow up with view_bionic_method.",
 		InputSchema: InputSchema{
 			Type: "object",
 			Properties: map[string]Property{
@@ -446,7 +447,11 @@ func handleToolsCall(rawRequest []byte, id json.RawMessage, root string, session
 	switch callReq.Params.Name {
 	case "view_bionic_skeleton":
 		var buf bytes.Buffer
-		if err := tool.Process(bytes.NewReader(data), &buf); err != nil {
+		process := tool.Process
+		if index.IsScript(filePath) {
+			process = func(r io.Reader, w io.Writer) error { return tool.ProcessScript(filePath, r, w) }
+		}
+		if err := process(bytes.NewReader(data), &buf); err != nil {
 			sendError(id, fmt.Sprintf("Error parsing file: %v", err))
 			return
 		}
@@ -470,12 +475,22 @@ func handleToolsCall(rawRequest []byte, id json.RawMessage, root string, session
 			return
 		}
 
-		results, err := tool.ExtractMethods(bytes.NewReader(data), methodNames) // ← NEW: bytes.NewReader
-		if err != nil {
-			sendError(id, fmt.Sprintf("Error extracting methods: %v", err))
-			return
+		if index.IsScript(filePath) {
+			results, err := tool.ExtractScriptDefinitions(filePath, bytes.NewReader(data), methodNames)
+			if err != nil {
+				sendError(id, fmt.Sprintf("Error extracting definitions: %v", err))
+				return
+			}
+			candidates, _ := tool.ListScriptDefinitions(filePath, bytes.NewReader(data))
+			resultText = formatResults(methodNames, results, candidates)
+		} else {
+			results, err := tool.ExtractMethods(bytes.NewReader(data), methodNames) // ← NEW: bytes.NewReader
+			if err != nil {
+				sendError(id, fmt.Sprintf("Error extracting methods: %v", err))
+				return
+			}
+			resultText = formatMethodResults(methodNames, results, data)
 		}
-		resultText = formatMethodResults(methodNames, results, data)
 
 		logger.Log(Event{
 			Tool:          "view_bionic_method",
@@ -528,6 +543,16 @@ func handleToolsCall(rawRequest []byte, id json.RawMessage, root string, session
 // of a skeleton round-trip. `source` is the file's raw bytes; it is only
 // re-scanned when something is missing, keeping the happy path free.
 func formatMethodResults(requested []string, results map[string]string, source []byte) string {
+	// Suggestion pool: every method/test name the file actually defines.
+	// A scan failure here must not lose the not-found report, so the error
+	// is swallowed and we simply offer no suggestions.
+	candidates, _ := tool.ListDefinitions(bytes.NewReader(source))
+	return formatResults(requested, results, candidates)
+}
+
+// formatResults reports each extracted body, then the names not found with
+// suggestions drawn from candidates.
+func formatResults(requested []string, results map[string]string, candidates []string) string {
 	var buf strings.Builder
 	var missing []string
 
@@ -545,12 +570,7 @@ func formatMethodResults(requested []string, results map[string]string, source [
 	}
 
 	fmt.Fprintf(&buf, "# === not found: %s ===\n", strings.Join(missing, ", "))
-
-	// Suggestion pool: every method/test name the file actually defines.
-	// A scan failure here must not lose the not-found report, so the error
-	// is swallowed and we simply offer no suggestions.
-	candidates, err := tool.ListDefinitions(bytes.NewReader(source))
-	if err != nil || len(candidates) == 0 {
+	if len(candidates) == 0 {
 		return buf.String()
 	}
 
