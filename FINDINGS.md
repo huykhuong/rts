@@ -370,6 +370,10 @@ refuse to store a map that is not about real code:
   half a map stored silently would read back as the whole one.
 - **Secrets, strictly**: a protected credential file can be neither a member
   nor named in a note, on top of the redaction every RTS tool already applies.
+- **No pointers into scratch folders**: a note that names a file under `tmp/`,
+  `log/`, `coverage/`, `node_modules/` or `.claude/` is refused. The first
+  real map written from a resumed session pointed at `tmp/il_sample/build.rb`,
+  which is gone once its worktree is cleaned up.
 - **On read**, each member file is hashed and compared with its hash at write
   time. A changed file is marked `[changed]`, the map is still shown, and the
   reader is told to confirm around it. Most of a stale map is still right.
