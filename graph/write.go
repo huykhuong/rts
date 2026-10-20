@@ -3,6 +3,7 @@ package graph
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,6 +42,11 @@ type Feature struct {
 	Notes     []string
 	UpdatedAt time.Time
 	Session   string
+
+	// refPaths is the file each resolved ref was found in, members and edge
+	// ends alike. Record keeps it in the refs table, which is how Prune can
+	// tell branch-only code that still exists from code that is gone.
+	refPaths map[string]string
 }
 
 // Member is a class, module or file that makes up a feature.
@@ -66,8 +72,15 @@ type Edge struct {
 // It returns every problem it finds rather than the first, because the
 // caller is a model that will fix and resend: one round trip per typo would
 // turn a ten-member map into ten calls.
-func Resolve(projectRoot string, idx *index.IndexFile, f *Feature) []string {
+//
+// checkout is the session's own checkout — a worktree, usually — and may be
+// "" or projectRoot itself. A name the main checkout's index lacks is looked
+// for there, because a session building a feature on a branch maps exactly
+// the files the main checkout does not have yet.
+func Resolve(projectRoot, checkout string, idx *index.IndexFile, f *Feature) []string {
 	var problems []string
+	r := &resolver{root: projectRoot, checkout: checkout, idx: idx}
+	f.refPaths = map[string]string{}
 
 	f.Name = strings.TrimSpace(f.Name)
 	f.Summary = strings.TrimSpace(f.Summary)
@@ -96,7 +109,7 @@ func Resolve(projectRoot string, idx *index.IndexFile, f *Feature) []string {
 	seen := map[string]bool{}
 	members := make([]Member, 0, len(f.Members))
 	for _, m := range f.Members {
-		ref, path, err := resolveRef(projectRoot, idx, m.Ref)
+		ref, path, err := r.resolve(m.Ref)
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("member %q: %v", m.Ref, err))
 			continue
@@ -107,8 +120,9 @@ func Resolve(projectRoot string, idx *index.IndexFile, f *Feature) []string {
 		seen[ref] = true
 
 		m.Ref, m.Path = ref, path
+		f.refPaths[ref] = path
 		m.Role = strings.TrimSpace(m.Role)
-		if data, err := os.ReadFile(filepath.Join(projectRoot, path)); err == nil {
+		if data, err := readIn(projectRoot, checkout, path); err == nil {
 			m.Fingerprint = index.Fingerprint(data)
 		}
 		members = append(members, m)
@@ -124,11 +138,11 @@ func Resolve(projectRoot string, idx *index.IndexFile, f *Feature) []string {
 			continue
 		}
 
-		src, _, srcErr := resolveRef(projectRoot, idx, e.Src)
+		src, srcPath, srcErr := r.resolve(e.Src)
 		if srcErr != nil {
 			problems = append(problems, fmt.Sprintf("edge source %q: %v", e.Src, srcErr))
 		}
-		dst, _, dstErr := resolveRef(projectRoot, idx, e.Dst)
+		dst, dstPath, dstErr := r.resolve(e.Dst)
 		if dstErr != nil {
 			problems = append(problems, fmt.Sprintf("edge target %q: %v", e.Dst, dstErr))
 		}
@@ -137,6 +151,7 @@ func Resolve(projectRoot string, idx *index.IndexFile, f *Feature) []string {
 		}
 
 		e.Src, e.Dst, e.Origin = src, dst, "claude"
+		f.refPaths[src], f.refPaths[dst] = srcPath, dstPath
 		if edgeSeen[e] {
 			continue
 		}
@@ -166,13 +181,24 @@ func Resolve(projectRoot string, idx *index.IndexFile, f *Feature) []string {
 	return problems
 }
 
-// resolveRef turns a ref into its canonical form and the file it lives in.
+// resolver resolves refs against the main checkout's index and, failing
+// that, the session's own checkout. The checkout is indexed at most once per
+// write, and only when a name is missing from the main index.
+type resolver struct {
+	root, checkout string
+	idx            *index.IndexFile
+	local          *index.IndexFile
+	localTried     bool
+}
+
+// resolve turns a ref into its canonical form and the file it lives in.
 //
-// A ref with a slash or a file extension is a path and must exist; anything
-// else is a class or module name and must be in the index. A method name, an
-// ambiguous short name or a name nothing defines is refused with what was
-// found instead, so the fix is one edit away.
-func resolveRef(projectRoot string, idx *index.IndexFile, ref string) (string, string, error) {
+// A ref with a slash or a file extension is a path and must exist in the
+// session's checkout or the main one; anything else is a class or module
+// name and must be in an index. A method name, an ambiguous short name or a
+// name nothing defines is refused with what was found instead, so the fix is
+// one edit away.
+func (r *resolver) resolve(ref string) (string, string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return "", "", fmt.Errorf("empty")
@@ -186,10 +212,42 @@ func resolveRef(projectRoot string, idx *index.IndexFile, ref string) (string, s
 		if secrets.IsProtected(rel) {
 			return "", "", fmt.Errorf("a protected credential file; feature maps never include one")
 		}
-		if _, err := os.Stat(filepath.Join(projectRoot, rel)); err != nil {
+		if !existsIn(r.root, r.checkout, rel) {
 			return "", "", fmt.Errorf("no such file or directory in this project")
 		}
 		return rel, rel, nil
+	}
+
+	q, path, err := lookupClass(r.idx, ref)
+	if errors.Is(err, errNotDefined) {
+		if local := r.localIndex(); local != nil {
+			q, path, err = lookupClass(local, ref)
+		}
+	}
+	return q, path, err
+}
+
+func (r *resolver) localIndex() *index.IndexFile {
+	if r.localTried {
+		return r.local
+	}
+	r.localTried = true
+	if r.checkout == "" || filepath.Clean(r.checkout) == filepath.Clean(r.root) {
+		return nil
+	}
+	symbols, err := index.BuildIndex(r.checkout)
+	if err != nil {
+		return nil
+	}
+	r.local = &index.IndexFile{Symbols: symbols}
+	return r.local
+}
+
+var errNotDefined = errors.New("no class or module by that name in the index (run `rts index` if it is new)")
+
+func lookupClass(idx *index.IndexFile, ref string) (string, string, error) {
+	if idx == nil {
+		return "", "", errNotDefined
 	}
 
 	found := index.Find(idx, ref)
@@ -219,7 +277,28 @@ func resolveRef(projectRoot string, idx *index.IndexFile, ref string) (string, s
 	case methods > 0:
 		return "", "", fmt.Errorf("is a method, not a class or module; name the class it belongs to")
 	}
-	return "", "", fmt.Errorf("no class or module by that name in the index (run `rts index` if it is new)")
+	return "", "", errNotDefined
+}
+
+// readIn reads a project-relative file from the session's checkout when it
+// is there, and from the main checkout otherwise.
+func readIn(root, checkout, rel string) ([]byte, error) {
+	if checkout != "" {
+		if data, err := os.ReadFile(filepath.Join(checkout, rel)); err == nil {
+			return data, nil
+		}
+	}
+	return os.ReadFile(filepath.Join(root, rel))
+}
+
+func existsIn(root, checkout, rel string) bool {
+	if checkout != "" {
+		if _, err := os.Stat(filepath.Join(checkout, rel)); err == nil {
+			return true
+		}
+	}
+	_, err := os.Stat(filepath.Join(root, rel))
+	return err == nil
 }
 
 // definingPath picks the file to fingerprint for a class that is opened in
@@ -332,6 +411,11 @@ func Record(db *sql.DB, f Feature) (replaced bool, err error) {
 	}
 	for i, n := range f.Notes {
 		if _, err := tx.Exec("INSERT INTO notes (feature_id, ord, body) VALUES (?, ?, ?)", id, i, n); err != nil {
+			return false, err
+		}
+	}
+	for ref, path := range f.refPaths {
+		if _, err := tx.Exec("INSERT INTO refs (ref, path) VALUES (?, ?) ON CONFLICT(ref) DO UPDATE SET path = excluded.path", ref, path); err != nil {
 			return false, err
 		}
 	}

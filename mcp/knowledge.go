@@ -27,7 +27,7 @@ import (
 // elsewhere — and a subagent is precisely the context that opens knowing
 // nothing about the codebase. A tool it can call is the one route in.
 func handleProjectMap(id json.RawMessage, root string, logger *EventLogger) {
-	text := brief.Render(root, brief.Options{})
+	text := brief.Render(root, brief.Options{Checkout: checkoutRoot})
 	if text == "" {
 		text = "No project map for this repo yet, and no findings recorded.\n" +
 			"Run `rts index` in the project root to build one.\n"

@@ -23,6 +23,12 @@ type PruneResult struct {
 // A map that has lost one class is still mostly right and keeps the rest;
 // a map whose whole feature is gone can only mislead, so it goes. Nothing is
 // rewritten: a ref either still resolves or is removed.
+//
+// Code that exists only on a worktree's branch is not in the main index, and
+// pruning it there would delete every map a session wrote while building a
+// feature. A ref the index lacks survives while the file it was found in
+// still exists in the main checkout or any worktree — so branch work lasts
+// until it is merged, and goes when its worktree is removed unmerged.
 func Prune(db *sql.DB, projectRoot string, idx *index.IndexFile) (PruneResult, error) {
 	var res PruneResult
 
@@ -32,12 +38,14 @@ func Prune(db *sql.DB, projectRoot string, idx *index.IndexFile) (PruneResult, e
 			known[index.QualifiedName(sym)] = true
 		}
 	}
-	exists := func(ref string) bool {
-		if strings.Contains(ref, "/") || filepath.Ext(ref) != "" {
-			_, err := os.Stat(filepath.Join(projectRoot, ref))
-			return err == nil
+	checkouts := index.Checkouts(projectRoot)
+	inAnyCheckout := func(rel string) bool {
+		for _, c := range checkouts {
+			if _, err := os.Stat(filepath.Join(c, rel)); err == nil {
+				return true
+			}
 		}
-		return known[ref]
+		return false
 	}
 
 	tx, err := db.Begin()
@@ -45,6 +53,32 @@ func Prune(db *sql.DB, projectRoot string, idx *index.IndexFile) (PruneResult, e
 		return res, err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	refPaths := map[string]string{}
+	rows, err := tx.Query("SELECT ref, path FROM refs")
+	if err != nil {
+		return res, err
+	}
+	for rows.Next() {
+		var ref, path string
+		if err := rows.Scan(&ref, &path); err != nil {
+			_ = rows.Close()
+			return res, err
+		}
+		refPaths[ref] = path
+	}
+	_ = rows.Close()
+
+	exists := func(ref string) bool {
+		if strings.Contains(ref, "/") || filepath.Ext(ref) != "" {
+			return inAnyCheckout(ref)
+		}
+		if known[ref] {
+			return true
+		}
+		path, ok := refPaths[ref]
+		return ok && inAnyCheckout(path)
+	}
 
 	refs, err := distinct(tx, "SELECT ref FROM members UNION SELECT src FROM edges UNION SELECT dst FROM edges")
 	if err != nil {
@@ -54,6 +88,9 @@ func Prune(db *sql.DB, projectRoot string, idx *index.IndexFile) (PruneResult, e
 	for _, ref := range refs {
 		if exists(ref) {
 			continue
+		}
+		if _, err := tx.Exec("DELETE FROM refs WHERE ref = ?", ref); err != nil {
+			return res, err
 		}
 		r, err := tx.Exec("DELETE FROM members WHERE ref = ?", ref)
 		if err != nil {

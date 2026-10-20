@@ -433,18 +433,29 @@ touched, 27 edited), it would have asked once, at the end, naming 18 areas
 cross-cutting feature into many, so the ask lists the eight largest and
 names the rest in a line, and says that one feature may span several areas.
 
+### Maps can include a branch's own code
+
+Names were first checked only against the main checkout's index, built from
+whatever branch it has checked out. Of the steroidd sessions that explored
+most in October, every one still on disk worked in a worktree on a branch
+2 to 29 commits ahead of `dev` — so a session mapping a feature it was
+building would have been refused for exactly the files it added.
+
+A name the main index lacks is now looked for in the session's own checkout:
+the worktree is indexed on the spot, once per write and only when needed
+(0.8 s for steroidd's 6,045 files). Every resolved name is stored with the
+file it was found in (`refs`), and `rts index` prunes a name only when that
+file exists in no checkout — the main one or any worktree git still records.
+Branch work therefore survives until it is merged, and goes when its worktree
+is removed unmerged. "Changed since" is judged against the reader's own
+checkout, so the session that wrote a map sees its branch's files as
+unchanged, and a session on `dev` sees them marked.
+
 ### What it does not do yet
 
 - **No edges are read off the code.** Every edge is a session's claim, checked
   only for its ends existing. `has_many`, `include` and inheritance could come
   from the parser (phase 3).
-- **Branch-only code cannot be mapped.** Names are checked against the main
-  checkout's index (see *Worktrees share the main checkout's memory*). The
-  steroidd map was built from a worktree on `huy/dev-2500-bar-chart-template`;
-  `HtmlEditMarkerAudit` and the board editor's schemas exist only on that
-  line of branches, so they are named in a note rather than as members. A
-  session mapping a feature it is building on a branch would be refused for
-  exactly the files it is adding.
 
 ---
 

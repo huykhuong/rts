@@ -26,6 +26,12 @@ var buildVersion = "unknown"
 // caught.
 var redactor = secrets.NewRedactor()
 
+// checkoutRoot is the top of the checkout the session runs in — a worktree's
+// own top for a session in a worktree. Feature maps resolve branch-only code
+// and judge staleness against it; every other store stays at the resolved
+// root. Empty means the same as the root.
+var checkoutRoot string
+
 // writeLine is the only place a JSON-RPC message leaves the server. Every
 // response passes through the redactor here, so no tool, error message or
 // future handler can return a key value without going through it.
@@ -49,6 +55,7 @@ func Start(buildTime string) {
 	// so every store below is rooted at the main checkout's when there is
 	// one, not the worktree's own working directory.
 	root := index.ResolveRoot(cwd)
+	checkoutRoot = index.CheckoutRoot(cwd)
 	redactor = secrets.NewRedactor(cwd, root)
 
 	indexCache := NewIndexCache(root)

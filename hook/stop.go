@@ -81,7 +81,8 @@ func StopReason(input PreToolUseInput, now time.Time) string {
 		return "" // record_feature checks names against the index; without one it can only refuse
 	}
 
-	touched := scanSession(input.TranscriptPath, cwd, index.CheckoutRoot(cwd))
+	checkout := index.CheckoutRoot(cwd)
+	touched := scanSession(input.TranscriptPath, cwd, checkout)
 	if len(touched) == 0 {
 		return ""
 	}
@@ -89,7 +90,7 @@ func StopReason(input PreToolUseInput, now time.Time) string {
 	var coverage graph.Coverage
 	var asked map[string]bool
 	if db, err := graph.OpenExisting(root); err == nil {
-		coverage, _ = graph.Covered(db, root)
+		coverage, _ = graph.Covered(db, root, checkout)
 		asked, _ = graph.Asked(db, input.SessionID)
 		_ = db.Close()
 	}

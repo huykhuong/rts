@@ -152,3 +152,23 @@ func CheckoutRoot(dir string) string {
 	}
 	return filepath.Dir(gitPath)
 }
+
+// Checkouts returns the main checkout and every linked worktree of the repo
+// whose main checkout is root, read from git's own worktree records so it
+// needs no git binary. A worktree whose directory is gone is left out.
+func Checkouts(root string) []string {
+	out := []string{root}
+
+	records, _ := filepath.Glob(filepath.Join(root, ".git", "worktrees", "*", "gitdir"))
+	for _, rec := range records {
+		data, err := os.ReadFile(rec)
+		if err != nil {
+			continue
+		}
+		dir := filepath.Dir(strings.TrimSpace(string(data)))
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			out = append(out, dir)
+		}
+	}
+	return out
+}
