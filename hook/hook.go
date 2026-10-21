@@ -1,6 +1,8 @@
 package hook
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,9 +26,11 @@ type PreToolUseInput struct {
 	ToolInput json.RawMessage `json:"tool_input"`
 
 	// HookEventName is how Claude Code says which hook fired. RTS is wired
-	// to three of them — PreToolUse to block wasteful reads, SessionStart to
-	// hand the session its orientation, Stop to ask it to save a feature map
-	// of what it explored — and one binary answers all three.
+	// to five of them — PreToolUse to block wasteful reads, SessionStart to
+	// hand the session its orientation, UserPromptSubmit and PostToolUse to
+	// point a task or a read that touches mapped code at its map, Stop to ask
+	// it to save a feature map of what it explored — and one binary answers
+	// them all.
 	HookEventName string `json:"hook_event_name"`
 
 	// Source is set on SessionStart only: "startup", "resume", "clear" or
@@ -40,6 +44,9 @@ type PreToolUseInput struct {
 	TranscriptPath string `json:"transcript_path"`
 	StopHookActive bool   `json:"stop_hook_active"`
 	PermissionMode string `json:"permission_mode"`
+
+	// Prompt is set on UserPromptSubmit: the message being sent.
+	Prompt string `json:"prompt"`
 }
 
 // readToolInput is the shape of tool_input when tool_name == "Read".
@@ -74,6 +81,22 @@ func Run(r io.Reader, w io.Writer) error {
 		return nil // fail open: allow Claude to move on
 	}
 
+	if input.HookEventName == "UserPromptSubmit" {
+		context := PromptContext(input, time.Now())
+		if context == "" {
+			return nil
+		}
+		return writeEventContext(w, "UserPromptSubmit", context)
+	}
+
+	if input.HookEventName == "PostToolUse" {
+		context := NudgeContext(input, time.Now())
+		if context == "" {
+			return nil
+		}
+		return writePostToolContext(w, context)
+	}
+
 	if input.HookEventName == "Stop" {
 		reason := StopReason(input, time.Now())
 		if reason == "" {
@@ -82,7 +105,7 @@ func Run(r io.Reader, w io.Writer) error {
 		return writeStop(w, reason)
 	}
 
-		if input.HookEventName == "SessionStart" {
+	if input.HookEventName == "SessionStart" {
 		context := SessionContext(input, time.Now())
 		if context == "" {
 			return nil
@@ -101,9 +124,9 @@ func Run(r io.Reader, w io.Writer) error {
 // SessionContext builds the orientation text for a starting session, or ""
 // when this start does not warrant one.
 //
-// A resume is skipped on purpose: the transcript comes back with it, brief
-// and all, so emitting a second copy pays twice for the same context and puts
-// a stale map underneath a fresh one. A compact is NOT skipped — the summary
+// A resume is skipped on purpose when the transcript comes back with its
+// brief: emitting a second copy pays twice for the same context and puts a
+// stale map underneath a fresh one. A resumed transcript without one gets it. A compact is NOT skipped — the summary
 // that survives it routinely drops the map, which is the moment the session
 // starts re-deriving the codebase by hand again.
 func SessionContext(input PreToolUseInput, now time.Time) string {
@@ -130,6 +153,14 @@ func SessionContext(input PreToolUseInput, now time.Time) string {
 
 	switch input.Source {
 	case "startup", "clear", "compact", "":
+	case "resume":
+		// A resumed transcript usually carries its brief already. One that
+		// does not — a session begun before RTS's hooks were wired into the
+		// project, which only gets them by being restarted — would otherwise
+		// never get one.
+		if hasBrief(input.TranscriptPath) {
+			return ""
+		}
 	default:
 		return ""
 	}
@@ -138,6 +169,34 @@ func SessionContext(input PreToolUseInput, now time.Time) string {
 	// it is scrubbed like any MCP response before it gets there.
 	text := brief.Render(root, brief.Options{Now: now, Drift: drift, Refreshing: refreshing, Checkout: index.CheckoutRoot(cwd)})
 	return secrets.NewRedactor(cwd, root).Redact(text)
+}
+
+// briefMarkers are lines only the brief writes, whichever of its sections
+// a project has.
+var briefMarkers = [][]byte{[]byte("=== rts project map"), []byte("--- Mapped features ("), []byte("--- Recorded findings (")}
+
+// hasBrief reports whether a transcript already holds an RTS brief. An
+// unreadable transcript counts as having one: the resume rule's default
+// stays as it was.
+func hasBrief(transcriptPath string) bool {
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return true
+	}
+	defer func() { _ = f.Close() }()
+
+	reader := bufio.NewReaderSize(f, 1<<20)
+	for {
+		line, err := reader.ReadBytes('\n')
+		for _, m := range briefMarkers {
+			if bytes.Contains(line, m) {
+				return true
+			}
+		}
+		if err != nil {
+			return false
+		}
+	}
 }
 
 func writeDeny(w io.Writer, reason string) error {

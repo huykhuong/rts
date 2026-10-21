@@ -291,6 +291,7 @@ func handleToolsList(id json.RawMessage) {
 			"Map only what you actually read; never guess a connection to fill the picture out. " +
 			"Every class name and path is checked against the code, and a map with any name that doesn't resolve is refused whole with a list of what to fix. " +
 			"Saving a feature name that already exists replaces that map (the old one is kept in history), so send the complete map as you now understand it, not just the new parts. " +
+			"Check the mapped features first (listed at session start and in project_map): a map that mostly repeats an existing feature under a new name is refused. " +
 			"Say in one line what you saved, after you save it.",
 		InputSchema: InputSchema{
 			Type: "object",
@@ -316,6 +317,11 @@ func handleToolsList(id json.RawMessage) {
 				"notes": {
 					Type:        "array",
 					Description: "Optional, at most 8: non-obvious facts the structure can't show (e.g. 'Templates are copied, not linked, so editing one never changes existing boards').",
+					Items:       &PropertyItems{Type: "string"},
+				},
+				"distinct_from": {
+					Type:        "array",
+					Description: "Optional. A map that repeats most of an existing feature's files is refused as a duplicate. If it really is a different feature, name the existing feature(s) here to save it anyway.",
 					Items:       &PropertyItems{Type: "string"},
 				},
 			},

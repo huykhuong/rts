@@ -396,7 +396,7 @@ func TestOpen_UpgradesAVersionOneGraphInPlace(t *testing.T) {
 	saved(t, db, root, idx, boardTemplates())
 
 	// Turn it back into what version 1 wrote: no stop_asks table.
-	if _, err := db.Exec("DROP TABLE stop_asks; PRAGMA user_version = 1"); err != nil {
+	if _, err := db.Exec("DROP TABLE stop_asks; DROP TABLE refs; DROP TABLE nudges; PRAGMA user_version = 1"); err != nil {
 		t.Fatal(err)
 	}
 	_ = db.Close()
@@ -414,6 +414,9 @@ func TestOpen_UpgradesAVersionOneGraphInPlace(t *testing.T) {
 	}
 	if err := MarkAsked(upgraded, "s", []string{"board_template"}, time.Now()); err != nil {
 		t.Errorf("stop_asks is missing after the upgrade: %v", err)
+	}
+	if err := MarkNudged(upgraded, "s", []string{"board templates"}, time.Now()); err != nil {
+		t.Errorf("nudges is missing after the upgrade: %v", err)
 	}
 	if features, _ := Summaries(upgraded, root, ""); len(features) != 1 {
 		t.Errorf("the upgrade lost the feature maps: %+v", features)
@@ -446,9 +449,15 @@ func TestResolve_FindsBranchOnlyCodeInTheSessionsCheckout(t *testing.T) {
 	root, idx := project(t)
 	wt := withWorktree(t, root)
 
+	// A dispatcher in the main checkout maps what a worker built in its
+	// worktree: the name resolves there, and its file is fingerprinted from
+	// the worktree that has it.
 	f := barChart()
-	if problems := Resolve(root, "", idx, &f); !strings.Contains(strings.Join(problems, "\n"), `"BarChart": nothing by that name`) {
-		t.Fatalf("without the worktree, BarChart should not resolve: %v", problems)
+	if problems := Resolve(root, "", idx, &f); len(problems) > 0 {
+		t.Fatalf("BarChart exists in one of the project's worktrees and should resolve from the main checkout: %v", problems)
+	}
+	if f.Members[0].Path != "app/models/bar_chart.rb" || f.Members[0].Fingerprint == "" {
+		t.Errorf("a member found in another worktree was not located and fingerprinted: %+v", f.Members[0])
 	}
 
 	f = barChart()
@@ -460,6 +469,19 @@ func TestResolve_FindsBranchOnlyCodeInTheSessionsCheckout(t *testing.T) {
 	}
 	if f.refPaths["BarChart"] != "app/models/bar_chart.rb" {
 		t.Errorf("the edge end's file was not recorded: %v", f.refPaths)
+	}
+}
+
+func TestResolve_ARemovedWorktreeNoLongerCounts(t *testing.T) {
+	root, idx := project(t)
+	wt := withWorktree(t, root)
+	if err := os.RemoveAll(wt); err != nil {
+		t.Fatal(err)
+	}
+
+	f := barChart()
+	if problems := Resolve(root, "", idx, &f); !strings.Contains(strings.Join(problems, "\n"), `"BarChart": nothing by that name`) {
+		t.Errorf("BarChart's only worktree is gone, so it should not resolve: %v", problems)
 	}
 }
 
@@ -535,5 +557,84 @@ func TestResolve_RefusesNotesThatPointAtScratchFiles(t *testing.T) {
 		if got := strings.Contains(problems, "scratch file"); got != refused {
 			t.Errorf("note %q: refused = %v, want %v (%s)", note, got, refused, problems)
 		}
+	}
+}
+
+func TestFeaturesContaining_FileAndDirectoryMembers(t *testing.T) {
+	root, idx := project(t)
+	db := open_(t, root)
+	saved(t, db, root, idx, boardTemplates())
+
+	for rel, want := range map[string]int{
+		"app/models/board_template.rb":             1, // a class member's file
+		"app/views/board_templates/index.html.erb": 1, // inside a directory member
+		"app/views/board_templates_old/x.erb":      0, // a sibling with the same prefix is not inside
+		"app/models/board.rb":                      0, // an edge end, not a member
+	} {
+		got, err := FeaturesContaining(db, rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != want {
+			t.Errorf("FeaturesContaining(%q) = %+v, want %d feature(s)", rel, got, want)
+		}
+	}
+}
+
+func TestNudged_RemembersPerSession(t *testing.T) {
+	root, _ := project(t)
+	db := open_(t, root)
+
+	if err := MarkNudged(db, "s1", []string{"board templates"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := Nudged(db, "s1"); !n["board templates"] {
+		t.Error("s1's nudge was not remembered")
+	}
+	if n, _ := Nudged(db, "s2"); n["board templates"] {
+		t.Error("another session inherited s1's nudge")
+	}
+}
+
+func TestOverlaps_FlagsADuplicateButNotARelatedFeature(t *testing.T) {
+	root, idx := project(t)
+	db := open_(t, root)
+	saved(t, db, root, idx, boardTemplates()) // 4 members
+
+	dup := Feature{Name: "templates", Summary: "s", Members: []Member{
+		{Ref: "BoardTemplate"}, {Ref: "BoardTemplatesController"}, {Ref: "CreateBoardFromTemplateJob"}, {Ref: "Board"},
+	}}
+	if problems := Resolve(root, "", idx, &dup); len(problems) > 0 {
+		t.Fatal(problems)
+	}
+	overlaps, err := Overlaps(db, dup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(overlaps) != 1 || overlaps[0].Name != "board templates" || overlaps[0].Shared != 3 || overlaps[0].Of != 4 {
+		t.Errorf("3 of 4 files already in board templates should be flagged: %+v", overlaps)
+	}
+	if left := Distinct(overlaps, []string{"Board Templates"}); len(left) != 0 {
+		t.Errorf("distinct_from should clear the overlap it names: %+v", left)
+	}
+
+	related := Feature{Name: "boards", Summary: "s", Members: []Member{
+		{Ref: "Board"}, {Ref: "BoardTemplate"}, {Ref: "Admin::Template"}, {Ref: "Report::Template"}, {Ref: "app/models/user.rb"},
+	}}
+	write(t, root, "app/models/user.rb", "class User\nend\n")
+	if problems := Resolve(root, "", idx, &related); len(problems) > 0 {
+		t.Fatal(problems)
+	}
+	if overlaps, _ := Overlaps(db, related); len(overlaps) != 0 {
+		t.Errorf("a feature sharing 1 of 5 files is related, not a duplicate: %+v", overlaps)
+	}
+
+	// Re-saving under its own name is never a duplicate of itself.
+	same := boardTemplates()
+	if problems := Resolve(root, "", idx, &same); len(problems) > 0 {
+		t.Fatal(problems)
+	}
+	if overlaps, _ := Overlaps(db, same); len(overlaps) != 0 {
+		t.Errorf("a feature overlapped itself: %+v", overlaps)
 	}
 }
