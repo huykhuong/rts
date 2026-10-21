@@ -24,9 +24,11 @@ type PreToolUseInput struct {
 	ToolInput json.RawMessage `json:"tool_input"`
 
 	// HookEventName is how Claude Code says which hook fired. RTS is wired
-	// to three of them — PreToolUse to block wasteful reads, SessionStart to
-	// hand the session its orientation, Stop to ask it to save a feature map
-	// of what it explored — and one binary answers all three.
+	// to five of them — PreToolUse to block wasteful reads, SessionStart to
+	// hand the session its orientation, UserPromptSubmit and PostToolUse to
+	// point a task or a read that touches mapped code at its map, Stop to ask
+	// it to save a feature map of what it explored — and one binary answers
+	// them all.
 	HookEventName string `json:"hook_event_name"`
 
 	// Source is set on SessionStart only: "startup", "resume", "clear" or
@@ -40,6 +42,9 @@ type PreToolUseInput struct {
 	TranscriptPath string `json:"transcript_path"`
 	StopHookActive bool   `json:"stop_hook_active"`
 	PermissionMode string `json:"permission_mode"`
+
+	// Prompt is set on UserPromptSubmit: the message being sent.
+	Prompt string `json:"prompt"`
 }
 
 // readToolInput is the shape of tool_input when tool_name == "Read".
@@ -74,6 +79,22 @@ func Run(r io.Reader, w io.Writer) error {
 		return nil // fail open: allow Claude to move on
 	}
 
+	if input.HookEventName == "UserPromptSubmit" {
+		context := PromptContext(input, time.Now())
+		if context == "" {
+			return nil
+		}
+		return writeEventContext(w, "UserPromptSubmit", context)
+	}
+
+	if input.HookEventName == "PostToolUse" {
+		context := NudgeContext(input, time.Now())
+		if context == "" {
+			return nil
+		}
+		return writePostToolContext(w, context)
+	}
+
 	if input.HookEventName == "Stop" {
 		reason := StopReason(input, time.Now())
 		if reason == "" {
@@ -82,7 +103,7 @@ func Run(r io.Reader, w io.Writer) error {
 		return writeStop(w, reason)
 	}
 
-		if input.HookEventName == "SessionStart" {
+	if input.HookEventName == "SessionStart" {
 		context := SessionContext(input, time.Now())
 		if context == "" {
 			return nil

@@ -67,3 +67,30 @@ func TestRecordFeatureRefusesAMapWithAnUnknownName(t *testing.T) {
 		t.Errorf("a refused map left something behind:\n%s", text)
 	}
 }
+
+func TestRecordFeatureRefusesANearDuplicateUnlessDeclaredDistinct(t *testing.T) {
+	root := graphProject(t)
+	writeInto(t, root, "app/models/membership.rb", "class Membership\nend\n")
+
+	accounts := map[string]interface{}{
+		"feature": "accounts",
+		"summary": "Users belong to an account.",
+		"members": []map[string]string{{"ref": "Account"}, {"ref": "User"}, {"ref": "app/models/membership.rb"}},
+	}
+	resultText(t, callTool(t, root, "record_feature", accounts))
+
+	dup := map[string]interface{}{
+		"feature": "account users",
+		"summary": "The same thing under another name.",
+		"members": []map[string]string{{"ref": "Account"}, {"ref": "User"}, {"ref": "app/models/membership.rb"}},
+	}
+	out := callTool(t, root, "record_feature", dup)
+	if !strings.Contains(out, `\"accounts\" already has 3 of this map's 3 files`) || !strings.Contains(out, "Nothing was saved") {
+		t.Fatalf("a near-duplicate should be refused naming the feature it repeats: %s", out)
+	}
+
+	dup["distinct_from"] = []string{"accounts"}
+	if text := resultText(t, callTool(t, root, "record_feature", dup)); !strings.Contains(text, `Saved feature "account users"`) {
+		t.Errorf("distinct_from should let a declared-different feature save: %s", text)
+	}
+}

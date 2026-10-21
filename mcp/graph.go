@@ -68,6 +68,29 @@ func handleRecordFeature(args map[string]json.RawMessage, id json.RawMessage, ro
 	}
 	defer func() { _ = db.Close() }()
 
+	// A map that mostly repeats another feature under a new name is the
+	// usual way the graph fills with near-duplicates: a session maps what it
+	// explored without knowing a map of it exists. It is refused with the
+	// feature it overlaps, so the session re-saves that one instead — or
+	// says, through distinct_from, that it really is a different feature.
+	overlaps, err := graph.Overlaps(db, f)
+	if err != nil {
+		sendError(id, fmt.Sprintf("Could not check for overlapping features: %v", err))
+		return
+	}
+	if overlaps = graph.Distinct(overlaps, stringListArg(args, "distinct_from")); len(overlaps) > 0 {
+		var buf strings.Builder
+		fmt.Fprintf(&buf, "Nothing was saved. This map repeats an existing feature:\n")
+		for _, o := range overlaps {
+			fmt.Fprintf(&buf, "  - %q already has %d of this map's %d files\n", o.Name, o.Shared, o.Of)
+		}
+		fmt.Fprintf(&buf, "If it is the same feature, call touchpoints with that name and save your additions under it "+
+			"(saving a name replaces its map, so send the whole map). If it really is a different feature, "+
+			"send this map again with distinct_from set to %q.\n", overlaps[0].Name)
+		sendError(id, buf.String())
+		return
+	}
+
 	replaced, err := graph.Record(db, f)
 	if err != nil {
 		sendError(id, fmt.Sprintf("Could not save the feature map: %v", err))

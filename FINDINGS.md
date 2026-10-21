@@ -449,6 +449,40 @@ touched, 27 edited), it would have asked once, at the end, naming 18 areas
 cross-cutting feature into many, so the ask lists the eight largest and
 names the rest in a line, and says that one feature may span several areas.
 
+### Pointing sessions at maps when it matters
+
+Listing the mapped features at session start was not enough. A steroidd
+dispatch worker on 2026-10-21 had the list in context and explored by hand
+anyway; asked why, it said it "should have called touchpoints before
+exploring". Its first message was "Read …/worker-task.md and follow it", so
+nothing it was told named a feature, and its first read of mapped code —
+`html_generator.rb`, a member of five maps — came several calls later,
+with nothing said.
+
+Two hooks now speak at those moments, sharing one record per session
+(`nudges`) so a feature is named at most once and never after the session
+has passed it to `touchpoints`:
+
+- **UserPromptSubmit** checks each message for a feature's name, a member's
+  path, or a distinctive class name (namespaced or multi-word CamelCase, so
+  "image" never means the Image model) — and follows any file path the
+  message points to and checks that file the same way. That worker's
+  `worker-task.md` names five maps, including "board refine change path",
+  the one its task was about; it would have heard so before its first tool
+  call. The file is read directly because the worker read it with `cat`,
+  which a read hook does not see.
+- **PostToolUse** on `Read`, `view_file` and the skeleton and method views
+  names the features a file belongs to, member or inside a member folder.
+
+Both add context rather than block anything; the session still decides.
+
+The steroidd graph also showed the cost of maps written without checking
+what exists: "board templates" shares 7 of its 10 files with "html board
+templates". `record_feature` now refuses a map when 60% or more of its files
+(at least 3) are already in one other feature, naming it, unless the call
+lists that feature in `distinct_from`. On steroidd's first nine maps the
+duplicate sat at 70%, and every related-but-distinct pair at 40% or less.
+
 ### Maps can include a branch's own code
 
 Names were first checked only against the main checkout's index, built from
