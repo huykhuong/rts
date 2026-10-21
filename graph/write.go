@@ -122,7 +122,7 @@ func Resolve(projectRoot, checkout string, idx *index.IndexFile, f *Feature) []s
 		m.Ref, m.Path = ref, path
 		f.refPaths[ref] = path
 		m.Role = strings.TrimSpace(m.Role)
-		if data, err := readIn(projectRoot, checkout, path); err == nil {
+		if data, err := r.read(path); err == nil {
 			m.Fingerprint = index.Fingerprint(data)
 		}
 		members = append(members, m)
@@ -186,22 +186,32 @@ func Resolve(projectRoot, checkout string, idx *index.IndexFile, f *Feature) []s
 }
 
 // resolver resolves refs against the main checkout's index and, failing
-// that, the session's own checkout. The checkout is indexed at most once per
-// write, and only when a name is missing from the main index.
+// that, the session's own checkout, then the project's other worktrees.
+// Each extra checkout is indexed at most once per write, and only when a
+// name is missing from every index before it.
+//
+// The other worktrees matter for a dispatcher: a session that runs in the
+// main checkout and hands work to workers in worktrees is the one that
+// understands what they built, and the code exists only in their
+// checkouts until it is merged. Hangout's dispatcher had both its maps
+// refused on 2026-10-21 because every file was in a worker's worktree.
 type resolver struct {
 	root, checkout string
 	idx            *index.IndexFile
-	local          *index.IndexFile
-	localTried     bool
+
+	others     []string // the session's checkout, then the other worktrees
+	othersRead bool
+	indexes    map[string]*index.IndexFile
+	foundIn    map[string]string // path → the checkout it was found in, when not the session's or the main one
 }
 
 // resolve turns a ref into its canonical form and the file it lives in.
 //
-// A ref with a slash or a file extension is a path and must exist in the
-// session's checkout or the main one; anything else is a class or module
-// name and must be in an index. A method name, an ambiguous short name or a
-// name nothing defines is refused with what was found instead, so the fix is
-// one edit away.
+// A ref with a slash or a file extension is a path and must exist in some
+// checkout of the project; anything else is a class or module name and must
+// be in an index. A method name, an ambiguous short name or a name nothing
+// defines is refused with what was found instead, so the fix is one edit
+// away.
 func (r *resolver) resolve(ref string) (string, string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -216,35 +226,88 @@ func (r *resolver) resolve(ref string) (string, string, error) {
 		if secrets.IsProtected(rel) {
 			return "", "", fmt.Errorf("a protected credential file; feature maps never include one")
 		}
-		if !existsIn(r.root, r.checkout, rel) {
-			return "", "", fmt.Errorf("no such file or directory in this project")
+		if existsIn(r.root, r.checkout, rel) {
+			return rel, rel, nil
 		}
-		return rel, rel, nil
+		for _, dir := range r.otherCheckouts() {
+			if _, err := os.Stat(filepath.Join(dir, rel)); err == nil {
+				r.remember(rel, dir)
+				return rel, rel, nil
+			}
+		}
+		return "", "", fmt.Errorf("no such file or directory in this project or its worktrees")
 	}
 
 	q, path, err := lookupClass(r.idx, ref)
-	if errors.Is(err, errNotDefined) {
-		if local := r.localIndex(); local != nil {
-			q, path, err = lookupClass(local, ref)
+	for _, dir := range r.otherCheckouts() {
+		if !errors.Is(err, errNotDefined) {
+			break
+		}
+		if idx := r.indexOf(dir); idx != nil {
+			if q, path, err = lookupClass(idx, ref); err == nil {
+				r.remember(path, dir)
+			}
 		}
 	}
 	return q, path, err
 }
 
-func (r *resolver) localIndex() *index.IndexFile {
-	if r.localTried {
-		return r.local
+// otherCheckouts lists, once, the checkouts to try after the main one: the
+// session's own first, then every other worktree git records.
+func (r *resolver) otherCheckouts() []string {
+	if r.othersRead {
+		return r.others
 	}
-	r.localTried = true
-	if r.checkout == "" || filepath.Clean(r.checkout) == filepath.Clean(r.root) {
-		return nil
+	r.othersRead = true
+
+	seen := map[string]bool{filepath.Clean(r.root): true}
+	add := func(dir string) {
+		if dir != "" && !seen[filepath.Clean(dir)] {
+			seen[filepath.Clean(dir)] = true
+			r.others = append(r.others, dir)
+		}
 	}
-	symbols, err := index.BuildIndex(r.checkout)
+	add(r.checkout)
+	for _, dir := range index.Checkouts(r.root) {
+		add(dir)
+	}
+	return r.others
+}
+
+func (r *resolver) indexOf(dir string) *index.IndexFile {
+	if idx, ok := r.indexes[dir]; ok {
+		return idx
+	}
+	if r.indexes == nil {
+		r.indexes = map[string]*index.IndexFile{}
+	}
+	symbols, err := index.BuildIndex(dir)
 	if err != nil {
+		r.indexes[dir] = nil
 		return nil
 	}
-	r.local = &index.IndexFile{Symbols: symbols}
-	return r.local
+	r.indexes[dir] = &index.IndexFile{Symbols: symbols}
+	return r.indexes[dir]
+}
+
+// remember notes that a path exists only in another worktree, so its
+// fingerprint is taken from there.
+func (r *resolver) remember(path, dir string) {
+	if dir == r.checkout {
+		return
+	}
+	if r.foundIn == nil {
+		r.foundIn = map[string]string{}
+	}
+	r.foundIn[path] = dir
+}
+
+// read reads a member's file from wherever it was found.
+func (r *resolver) read(path string) ([]byte, error) {
+	if dir, ok := r.foundIn[path]; ok {
+		return os.ReadFile(filepath.Join(dir, path))
+	}
+	return readIn(r.root, r.checkout, path)
 }
 
 var errNotDefined = errors.New("nothing by that name in the index: no class, module, interface, type, function or constant (run `rts index` if it is new)")

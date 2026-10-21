@@ -459,6 +459,17 @@ nothing it was told named a feature, and its first read of mapped code —
 `html_generator.rb`, a member of five maps — came several calls later,
 with nothing said.
 
+Hangout's dispatcher showed two more gaps the same day. It runs in the main
+checkout while its workers build in worktrees, and the Stop hook duly asked
+it to map what they had built — but both its maps, "All Hands globe" and
+"All Hands time capsule", were refused file by file: the code existed only
+in a worker's worktree, and names were checked against the main checkout
+and the session's own. They are now also looked for in every other worktree
+git records, each indexed once and only on a miss; replayed, both maps
+resolve. And a resumed session gets the brief when its transcript holds
+none: the rule that skips a resume assumed the session had been briefed at
+its start, which is not true of one begun before RTS's hooks were wired in.
+
 Two hooks now speak at those moments, sharing one record per session
 (`nudges`) so a feature is named at most once and never after the session
 has passed it to `touchpoints`:

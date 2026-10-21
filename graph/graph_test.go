@@ -449,9 +449,15 @@ func TestResolve_FindsBranchOnlyCodeInTheSessionsCheckout(t *testing.T) {
 	root, idx := project(t)
 	wt := withWorktree(t, root)
 
+	// A dispatcher in the main checkout maps what a worker built in its
+	// worktree: the name resolves there, and its file is fingerprinted from
+	// the worktree that has it.
 	f := barChart()
-	if problems := Resolve(root, "", idx, &f); !strings.Contains(strings.Join(problems, "\n"), `"BarChart": nothing by that name`) {
-		t.Fatalf("without the worktree, BarChart should not resolve: %v", problems)
+	if problems := Resolve(root, "", idx, &f); len(problems) > 0 {
+		t.Fatalf("BarChart exists in one of the project's worktrees and should resolve from the main checkout: %v", problems)
+	}
+	if f.Members[0].Path != "app/models/bar_chart.rb" || f.Members[0].Fingerprint == "" {
+		t.Errorf("a member found in another worktree was not located and fingerprinted: %+v", f.Members[0])
 	}
 
 	f = barChart()
@@ -463,6 +469,19 @@ func TestResolve_FindsBranchOnlyCodeInTheSessionsCheckout(t *testing.T) {
 	}
 	if f.refPaths["BarChart"] != "app/models/bar_chart.rb" {
 		t.Errorf("the edge end's file was not recorded: %v", f.refPaths)
+	}
+}
+
+func TestResolve_ARemovedWorktreeNoLongerCounts(t *testing.T) {
+	root, idx := project(t)
+	wt := withWorktree(t, root)
+	if err := os.RemoveAll(wt); err != nil {
+		t.Fatal(err)
+	}
+
+	f := barChart()
+	if problems := Resolve(root, "", idx, &f); !strings.Contains(strings.Join(problems, "\n"), `"BarChart": nothing by that name`) {
+		t.Errorf("BarChart's only worktree is gone, so it should not resolve: %v", problems)
 	}
 }
 

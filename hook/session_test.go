@@ -121,6 +121,33 @@ func TestSessionContext_SkipsResumeOnly(t *testing.T) {
 	}
 }
 
+func TestSessionContext_ResumeWithoutABriefGetsOne(t *testing.T) {
+	// A session begun before RTS's hooks were wired into the project only
+	// gets them by being restarted, which is a resume — and its transcript
+	// holds no brief to bring back.
+	root := indexedProject(t)
+	dir := t.TempDir()
+
+	without := filepath.Join(dir, "old.jsonl")
+	if err := os.WriteFile(without, []byte(`{"type":"user","message":{"content":"hello"}}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	with := filepath.Join(dir, "briefed.jsonl")
+	if err := os.WriteFile(with, []byte(`{"type":"attachment","content":"=== rts project map: app"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	resume := func(transcript string) string {
+		return SessionContext(PreToolUseInput{HookEventName: "SessionStart", Source: "resume", Cwd: root, TranscriptPath: transcript}, time.Now())
+	}
+	if resume(without) == "" {
+		t.Error("a resumed session that never had a brief should get one")
+	}
+	if got := resume(with); got != "" {
+		t.Errorf("a resumed session that already has its brief got a second:\n%s", got)
+	}
+}
+
 func TestSessionContext_KillSwitchSilencesIt(t *testing.T) {
 	// When RTS is disabled every tool refuses to run, so the brief — which
 	// tells the model to reach for those tools — must stand down too.
