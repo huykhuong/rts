@@ -38,10 +38,16 @@ const maxRenderedInsights = 12
 // crowd out the map. record_insight returns the whole body when asked.
 const bodyPreviewChars = 220
 
-// maxRenderedFeatures bounds the "Mapped features" list. One line each, so a
-// session can tell at a glance whether the area it is about to work in has a
-// map, without the list becoming a second project map.
-const maxRenderedFeatures = 30
+// The "Mapped features" list shows every map while a project has up to
+// listAllFeaturesUpTo of them, one line each, so a session can tell at a
+// glance whether its area has one. Past that it shows the listRecentFeatures
+// most recently updated and says how to search the rest: the startup cost
+// stays flat however many maps a project grows, and the hooks and
+// touchpoints' search find the others when a task needs them.
+const (
+	listAllFeaturesUpTo = 30
+	listRecentFeatures  = 10
+)
 
 // Options carry what the caller knows that the stores do not.
 type Options struct {
@@ -91,7 +97,7 @@ func Render(projectRoot string, opts Options) string {
 	findings := insight.Live(projectRoot, store)
 	features := loadFeatures(projectRoot, opts.Checkout)
 
-	if mapErr != nil && len(findings) == 0 && len(features) == 0 {
+	if mapErr != nil && len(findings) == 0 && features.total == 0 {
 		return ""
 	}
 
@@ -161,39 +167,49 @@ func renderMap(buf *strings.Builder, pm *index.ProjectMap) {
 	}
 }
 
+// featureList is what the brief shows of the feature maps.
+type featureList struct {
+	shown []graph.Summary
+	total int
+}
+
 // loadFeatures reads the feature list without ever creating a graph: the brief
 // runs in every project, and most have never mapped anything.
-func loadFeatures(projectRoot, checkout string) []graph.Summary {
+func loadFeatures(projectRoot, checkout string) featureList {
 	db, err := graph.OpenExisting(projectRoot)
 	if err != nil {
-		return nil
+		return featureList{}
 	}
 	defer func() { _ = db.Close() }()
 
-	features, err := graph.Summaries(db, projectRoot, checkout)
+	shown, total, err := graph.Recent(db, projectRoot, checkout, listAllFeaturesUpTo+1)
 	if err != nil {
-		return nil
+		return featureList{}
 	}
-	return features
+	if total > listAllFeaturesUpTo {
+		shown = shown[:listRecentFeatures]
+	}
+	return featureList{shown: shown, total: total}
 }
 
 // renderFeatures lists what touchpoints can answer, so a session about board
 // templates learns in its first turn that it need not send an Explore agent.
-func renderFeatures(buf *strings.Builder, features []graph.Summary) {
-	if len(features) == 0 {
+func renderFeatures(buf *strings.Builder, features featureList) {
+	if features.total == 0 {
 		return
 	}
 
-	shown := features
-	if len(shown) > maxRenderedFeatures {
-		shown = shown[:maxRenderedFeatures]
+	fmt.Fprintf(buf, "\n--- Mapped features (%d) ---\n", features.total)
+	if len(features.shown) < features.total {
+		fmt.Fprintf(buf, "The %d most recently updated are below. To find any of the others, call touchpoints\n"+
+			"with a word or two about your task (e.g. \"capsule\", \"pdf sizing\"): it searches every map\n"+
+			"and lists the ones that match. Then call it with the name of the one you need.\n\n", len(features.shown))
+	} else {
+		buf.WriteString("Call touchpoints with a name below before exploring that area: it returns\n" +
+			"the feature's classes, files and connections in one call.\n\n")
 	}
 
-	fmt.Fprintf(buf, "\n--- Mapped features (%d) ---\n", len(features))
-	buf.WriteString("Call touchpoints with a name below before exploring that area: it returns\n" +
-		"the feature's classes, files and connections in one call.\n\n")
-
-	for _, f := range shown {
+	for _, f := range features.shown {
 		line := fmt.Sprintf("  %s — %s, mapped %s", f.Name, plural(f.Members, "member"), f.UpdatedAt.Local().Format("2006-01-02"))
 		if f.Changed > 0 {
 			line += fmt.Sprintf(" (%d changed since)", f.Changed)
@@ -201,8 +217,8 @@ func renderFeatures(buf *strings.Builder, features []graph.Summary) {
 		buf.WriteString(line + "\n")
 	}
 
-	if len(features) > len(shown) {
-		fmt.Fprintf(buf, "\n  (%d more — `rts graph` lists them all)\n", len(features)-len(shown))
+	if more := features.total - len(features.shown); more > 0 {
+		fmt.Fprintf(buf, "  … and %d more, found by touchpoints' search\n", more)
 	}
 }
 

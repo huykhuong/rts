@@ -494,6 +494,28 @@ templates". `record_feature` now refuses a map when 60% or more of its files
 lists that feature in `distinct_from`. On steroidd's first nine maps the
 duplicate sat at 70%, and every related-but-distinct pair at 40% or less.
 
+### The startup list stays short; a search finds the rest
+
+The brief lists maps by name only — ten of steroidd's came to 953
+characters, against 6,014 for one full map — but a list that grows with the
+project is still a cost paid before any work starts. It now lists every map
+while a project has up to 30, and past that only the 10 most recently
+updated, with a line on how to find the others. Only the listed maps have
+their files hashed for "changed since", so session start does not slow down
+as maps accumulate either.
+
+The others are found two ways. The hooks above match a message, task file or
+read against every map, listed or not. And `touchpoints` now searches when
+given words that name no feature or class: each word must begin a word in a
+map's name, summary, member names or notes (so "ask" finds "asked" but not
+"task", and two-letter words like "ai" must match whole), scored in that
+order. On steroidd, "pdf sizing" finds exactly "html board sizing in report
+and pdf"; "billing" says nothing matches and how many maps it searched,
+instead of listing every name as a miss used to. A topic word no longer
+indexes every worktree on the way to that answer: `touchpoints` looks a
+class up in the main index only, which kept a miss in a repo with eight
+worktrees from taking seconds.
+
 ### Maps can include a branch's own code
 
 Names were first checked only against the main checkout's index, built from

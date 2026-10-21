@@ -1,12 +1,14 @@
 package brief
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"rts/graph"
 	"rts/index"
 	"rts/insight"
 )
@@ -258,4 +260,54 @@ func TestRenderFooter_OnlyAdvertisesToolsThatWorkHere(t *testing.T) {
 			t.Errorf("language-agnostic tools should still be offered:\n%s", buf.String())
 		}
 	})
+}
+
+// withFeatures saves n single-file feature maps into a project.
+func withFeatures(t *testing.T, root string, n int) {
+	t.Helper()
+	db, err := graph.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	for i := 0; i < n; i++ {
+		f := graph.Feature{
+			Name:    fmt.Sprintf("feature %02d", i),
+			Summary: "s",
+			Members: []graph.Member{{Ref: "app/models/user.rb"}},
+		}
+		if problems := graph.Resolve(root, "", &index.IndexFile{}, &f); len(problems) > 0 {
+			t.Fatal(problems)
+		}
+		if _, err := graph.Record(db, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRender_ListsEveryMapUpToThirty(t *testing.T) {
+	root := project(t)
+	withFeatures(t, root, 30)
+
+	text := Render(root, Options{SkipStaleness: true})
+	if !strings.Contains(text, "--- Mapped features (30) ---") || strings.Count(text, "  feature ") != 30 {
+		t.Errorf("thirty maps should all be listed:\n%s", text)
+	}
+	if strings.Contains(text, "and 0 more") || strings.Contains(text, "most recently updated") {
+		t.Errorf("a complete list should not point at the search:\n%s", text)
+	}
+}
+
+func TestRender_PastThirtyListsTenAndPointsAtTheSearch(t *testing.T) {
+	root := project(t)
+	withFeatures(t, root, 31)
+
+	text := Render(root, Options{SkipStaleness: true})
+	if !strings.Contains(text, "--- Mapped features (31) ---") || strings.Count(text, "  feature ") != 10 {
+		t.Errorf("past thirty, the ten most recent should be listed:\n%s", text)
+	}
+	if !strings.Contains(text, "call touchpoints\nwith a word or two about your task") || !strings.Contains(text, "… and 21 more, found by touchpoints' search") {
+		t.Errorf("the brief should say how to find the rest:\n%s", text)
+	}
 }

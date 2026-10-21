@@ -250,17 +250,79 @@ func TestTouchpoints_ClassNameFollowsConnectionsAcrossFeatures(t *testing.T) {
 	}
 }
 
-func TestTouchpoints_MissNamesWhatIsMapped(t *testing.T) {
+func TestTouchpoints_SearchesWhenNothingIsNamed(t *testing.T) {
 	root, idx := project(t)
 	db := open_(t, root)
 	saved(t, db, root, idx, boardTemplates())
+	saved(t, db, root, idx, Feature{
+		Name:    "boards",
+		Summary: "Boards hold a team's visualizations.",
+		Members: []Member{{Ref: "Board", Role: "model"}},
+	})
 
-	text, err := Touchpoints(db, root, "", idx, "billing", 1)
+	hit, err := Touchpoints(db, root, "", idx, "templates", 1)
 	if err != nil {
-		t.Fatalf("Touchpoints: %v", err)
+		t.Fatal(err)
 	}
-	if !strings.Contains(text, `Nothing mapped for "billing"`) || !strings.Contains(text, "Mapped features: board templates") {
-		t.Errorf("a miss should list what is mapped:\n%s", text)
+	if !strings.Contains(hit, `No feature is named "templates". Mapped features that match it:`) ||
+		!strings.Contains(hit, "board templates (4 files) — Admins save a board layout") {
+		t.Errorf("a topic word should find the feature it is about:\n%s", hit)
+	}
+	if strings.Contains(hit, "boards (") {
+		t.Errorf("a feature the word is not about was listed:\n%s", hit)
+	}
+
+	miss, err := Touchpoints(db, root, "", idx, "billing", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(miss, `Nothing mapped matches "billing" (searched 2 feature map(s)`) {
+		t.Errorf("a miss should say how much was searched, not list every map:\n%s", miss)
+	}
+}
+
+func TestSearch_RanksAndRequiresEveryWord(t *testing.T) {
+	root, idx := project(t)
+	db := open_(t, root)
+	saved(t, db, root, idx, boardTemplates()) // note: "Templates are copied, not linked…"
+	saved(t, db, root, idx, Feature{
+		Name:    "template copies",
+		Summary: "Copying a board.",
+		Members: []Member{{Ref: "Board"}},
+	})
+
+	names := func(q string) []string {
+		hits, err := Search(db, q, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, h := range hits {
+			out = append(out, h.Name)
+		}
+		return out
+	}
+
+	if got := names("template"); len(got) != 2 || got[0] != "board templates" && got[0] != "template copies" {
+		t.Errorf("both features have the word in their name: %v", got)
+	}
+	if got := names("linked"); len(got) != 1 || got[0] != "board templates" {
+		t.Errorf("a word only in a note should still find its feature: %v", got)
+	}
+	if got := names("CreateBoardFromTemplateJob"); len(got) != 1 || got[0] != "board templates" {
+		t.Errorf("a member's name should find its feature: %v", got)
+	}
+	if got := names("templates linked"); len(got) != 1 {
+		t.Errorf("every word must match: %v", got)
+	}
+	if got := names("pied"); len(got) != 0 {
+		t.Errorf("a word inside another (\"copied\") is not a match: %v", got)
+	}
+	if got := names("linked templates"); len(got) != 1 || got[0] != "board templates" {
+		t.Errorf("word order should not matter: %v", got)
+	}
+	if got := names("the feature about"); len(got) != 0 {
+		t.Errorf("stopwords alone should match nothing: %v", got)
 	}
 }
 
