@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"rts/index"
 )
@@ -81,16 +82,34 @@ type Summary struct {
 // Summaries lists every feature, most recently updated first. checkout is
 // the reader's own checkout, which "changed" is judged against.
 func Summaries(db *sql.DB, projectRoot, checkout string) ([]Summary, error) {
-	rows, err := db.Query("SELECT id FROM features ORDER BY updated_at DESC, name")
+	shown, _, err := Recent(db, projectRoot, checkout, 0)
+	return shown, err
+}
+
+// Recent lists the limit most recently updated features (all of them when
+// limit is 0) and the total. Only the listed features have their files
+// hashed for "changed since": the brief runs at every session start, and a
+// project with hundreds of maps would otherwise hash thousands of files to
+// show ten lines.
+func Recent(db *sql.DB, projectRoot, checkout string, limit int) ([]Summary, int, error) {
+	var total int
+	if err := db.QueryRow("SELECT count(*) FROM features").Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if limit <= 0 {
+		limit = -1 // SQLite: no limit
+	}
+
+	rows, err := db.Query("SELECT id FROM features ORDER BY updated_at DESC, name LIMIT ?", limit)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var ids []int64
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
 			_ = rows.Close()
-			return nil, err
+			return nil, 0, err
 		}
 		ids = append(ids, id)
 	}
@@ -100,7 +119,7 @@ func Summaries(db *sql.DB, projectRoot, checkout string) ([]Summary, error) {
 	for _, id := range ids {
 		f, err := load(db, id)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, Summary{
 			Name:      f.Name,
@@ -109,7 +128,7 @@ func Summaries(db *sql.DB, projectRoot, checkout string) ([]Summary, error) {
 			UpdatedAt: f.UpdatedAt,
 		})
 	}
-	return out, nil
+	return out, total, nil
 }
 
 // changedMembers returns the members whose file is not what it was when the
@@ -162,10 +181,13 @@ func Touchpoints(db *sql.DB, projectRoot, checkout string, idx *index.IndexFile,
 		return "", err
 	}
 
+	// Only the main index is consulted for a class name here. Resolving a
+	// miss through every worktree, as record_feature does, indexes each one —
+	// seconds in a repo with several — and a miss is the normal case for a
+	// topic word, which the search below answers.
 	ref := query
-	r := &resolver{root: projectRoot, checkout: checkout, idx: idx}
-	if resolved, _, err := r.resolve(query); err == nil {
-		ref = resolved
+	if q, _, err := lookupClass(idx, query); err == nil {
+		ref = q
 	}
 
 	features, err := featuresTouching(db, ref)
@@ -178,7 +200,7 @@ func Touchpoints(db *sql.DB, projectRoot, checkout string, idx *index.IndexFile,
 	}
 
 	if len(features) == 0 && len(neighbours) == 0 {
-		return missText(db, query)
+		return searchText(db, query)
 	}
 
 	var buf strings.Builder
@@ -258,31 +280,52 @@ func neighbourhood(db *sql.DB, ref string, depth int) ([]string, error) {
 	return lines, nil
 }
 
-func missText(db *sql.DB, query string) (string, error) {
-	rows, err := db.Query("SELECT name FROM features ORDER BY name")
+// maxSearchHits bounds a search's answer: past this the words were too
+// general to pick a feature, and more names would not help.
+const maxSearchHits = 8
+
+// searchText answers a query that names no feature and no mapped class:
+// the features it is about, by search, or what to do when none are.
+func searchText(db *sql.DB, query string) (string, error) {
+	hits, err := Search(db, query, maxSearchHits)
 	if err != nil {
 		return "", err
 	}
-	defer func() { _ = rows.Close() }()
 
-	var names []string
-	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
-			return "", err
-		}
-		names = append(names, n)
+	var total int
+	if err := db.QueryRow("SELECT count(*) FROM features").Scan(&total); err != nil {
+		return "", err
 	}
 
 	var buf strings.Builder
-	fmt.Fprintf(&buf, "Nothing mapped for %q.\n", query)
-	if len(names) > 0 {
-		fmt.Fprintf(&buf, "Mapped features: %s\n", strings.Join(names, ", "))
-	} else {
+	switch {
+	case len(hits) > 0:
+		fmt.Fprintf(&buf, "No feature is named %q. Mapped features that match it:\n\n", query)
+		for _, h := range hits {
+			fmt.Fprintf(&buf, "  %s (%d files) — %s\n", h.Name, h.Members, oneLine(h.Summary, 160))
+		}
+		buf.WriteString("\nCall touchpoints with the name of the one your task is about.\n")
+	case total > 0:
+		fmt.Fprintf(&buf, "Nothing mapped matches %q (searched %d feature map(s) by name, summary, notes and files).\n", query, total)
+		buf.WriteString("Explore it as usual, then save what you found with record_feature.\n")
+	default:
 		buf.WriteString("No features are mapped in this project yet.\n")
+		buf.WriteString("Explore it as usual, then save what you found with record_feature.\n")
 	}
-	buf.WriteString("Explore it as usual, then save what you found with record_feature.\n")
 	return buf.String(), nil
+}
+
+// oneLine collapses whitespace and cuts s to max bytes on a rune boundary.
+func oneLine(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) <= max {
+		return s
+	}
+	cut := max - len("…")
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 // renderFeature prints a map with its structure first and its notes last,
