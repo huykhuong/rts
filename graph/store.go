@@ -34,7 +34,7 @@ import (
 // SchemaVersion is stored in PRAGMA user_version. Like insights, the graph
 // holds conclusions nothing can rebuild, so an unknown version is an error
 // the caller sees rather than a reason to start over.
-const SchemaVersion = 4
+const SchemaVersion = 5
 
 // EdgeKinds is the closed list of connections a map may claim. It is closed so
 // that queries can filter on a kind and a made-up one is refused at the door
@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS features (
 	name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
 	summary    TEXT NOT NULL,
 	updated_at TEXT NOT NULL,
-	session    TEXT NOT NULL DEFAULT ''
+	session    TEXT NOT NULL DEFAULT '',
+	branch     TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS members (
 	feature_id  INTEGER NOT NULL REFERENCES features(id) ON DELETE CASCADE,
@@ -156,13 +157,14 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 
-	// Version 1 lacked stop_asks, version 2 refs, version 3 nudges. Every
-	// statement in the schema is IF NOT EXISTS, so running it over an older
-	// graph adds the missing tables and leaves the feature maps alone.
+	// Version 1 lacked stop_asks, version 2 refs, version 3 nudges, version 4
+	// features.branch. Every statement in the schema is IF NOT EXISTS, so
+	// running it over an older graph adds the missing tables and leaves the
+	// feature maps alone; the one added column is added below.
 	switch version {
 	case SchemaVersion:
 		return nil
-	case 0, 1, 2, 3:
+	case 0, 1, 2, 3, 4:
 		tx, err := db.Begin()
 		if err != nil {
 			return err
@@ -172,6 +174,9 @@ func migrate(db *sql.DB) error {
 		if _, err := tx.Exec(schema); err != nil {
 			return fmt.Errorf("creating schema: %w", err)
 		}
+		if err := addColumnIfMissing(tx, "features", "branch", "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
 			return err
 		}
@@ -179,6 +184,28 @@ func migrate(db *sql.DB) error {
 	default:
 		return fmt.Errorf("written by a different rts version (schema %d, expected %d)", version, SchemaVersion)
 	}
+}
+
+// addColumnIfMissing adds a column to a table an older version created
+// without it. SQLite has no ADD COLUMN IF NOT EXISTS, so it asks first.
+func addColumnIfMissing(tx *sql.Tx, table, column, decl string) error {
+	rows, err := tx.Query("SELECT name FROM pragma_table_info(?)", table)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	_ = rows.Close()
+	_, err = tx.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, decl))
+	return err
 }
 
 func validKind(kind string) bool {

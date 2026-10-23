@@ -94,3 +94,45 @@ func TestRecordFeatureRefusesANearDuplicateUnlessDeclaredDistinct(t *testing.T) 
 		t.Errorf("distinct_from should let a declared-different feature save: %s", text)
 	}
 }
+
+func TestFindSymbolReindexesOnAMissWhenTheCodeHasMoved(t *testing.T) {
+	root := graphProject(t)
+	fp, err := index.BuildFingerprints(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := index.WriteFingerprints(root, fp); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := 0
+	previous := reindexNow
+	reindexNow = func(dir string) error {
+		calls++
+		syms, err := index.BuildIndex(dir)
+		if err != nil {
+			return err
+		}
+		if err := index.Write(dir, syms); err != nil {
+			return err
+		}
+		fp, err := index.BuildFingerprints(dir)
+		if err != nil {
+			return err
+		}
+		return index.WriteFingerprints(dir, fp)
+	}
+	t.Cleanup(func() { reindexNow = previous })
+
+	// A miss with nothing changed costs the check and nothing more.
+	if text := resultText(t, callTool(t, root, "find_symbol", map[string]interface{}{"name": "Invoice"})); strings.Contains(text, "re-indexed") || calls != 0 {
+		t.Fatalf("an up-to-date index should not be rebuilt on a miss (calls=%d):\n%s", calls, text)
+	}
+
+	// A pull brings a class the index has never seen.
+	writeInto(t, root, "app/models/invoice.rb", "class Invoice\nend\n")
+	text := resultText(t, callTool(t, root, "find_symbol", map[string]interface{}{"name": "Invoice"}))
+	if calls != 1 || !strings.Contains(text, "re-indexed before answering") || !strings.Contains(text, "app/models/invoice.rb") {
+		t.Errorf("a miss on a stale index should reindex and then find the class (calls=%d):\n%s", calls, text)
+	}
+}

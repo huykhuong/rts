@@ -3,12 +3,14 @@ package mcp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -413,7 +415,7 @@ func handleToolsCall(rawRequest []byte, id json.RawMessage, root string, session
 
 	// We will try to do find_symbol first so Claude Code doesn't open a file it doesnt need
 	if callReq.Params.Name == "find_symbol" {
-		handleFindSymbol(callReq.Params.Arguments, id, indexCache, logger)
+		handleFindSymbol(callReq.Params.Arguments, id, root, indexCache, logger)
 		return
 	}
 
@@ -627,10 +629,26 @@ func sendError(id json.RawMessage, errMsg string) {
 	writeLine(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32603,"message":%q}}`, id, errMsg))
 }
 
+// reindexNow runs `rts index` in root and waits for it. A variable so tests
+// can stand in for the fork.
+var reindexNow = func(root string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Output goes nowhere: this process's stdout is the JSON-RPC stream.
+	cmd := exec.CommandContext(ctx, exe, "index")
+	cmd.Dir = root
+	return cmd.Run()
+}
+
 // handleFindSymbol queries the symbol index and returns a formatted
 // list of matching definitions. Errors (missing index, corrupted index)
 // come back as MCP errors with actionable hints — usually "run rts index".
-func handleFindSymbol(args map[string]json.RawMessage, id json.RawMessage, indexCache *IndexCache, logger *EventLogger) {
+func handleFindSymbol(args map[string]json.RawMessage, id json.RawMessage, root string, indexCache *IndexCache, logger *EventLogger) {
 	name, err := stringArg(args, "name")
 	if err != nil {
 		sendError(id, err.Error())
@@ -644,7 +662,25 @@ func handleFindSymbol(args map[string]json.RawMessage, id json.RawMessage, index
 	}
 
 	result := index.Find(idx, name)
-	resultText := formatSymbolMatches(name, result.Symbols, result.MatchKind, idx)
+
+	// A miss is when a stale index costs something: the class came in with a
+	// pull after the session's start-of-session refresh, and the session
+	// falls back to grep. So a miss checks whether the code has moved since
+	// the last index (a tenth of a second on steroidd) and, if it has,
+	// reindexes and asks again (about two seconds) before answering.
+	var refreshed string
+	if len(result.Symbols) == 0 {
+		if drift, err := index.CheckDrift(root); err == nil && drift.Stale() {
+			if reindexNow(root) == nil {
+				if fresh, err := indexCache.Get(); err == nil {
+					idx = fresh
+					result = index.Find(idx, name)
+					refreshed = fmt.Sprintf("# The index was behind the code (%s); re-indexed before answering.\n", drift.Describe())
+				}
+			}
+		}
+	}
+	resultText := refreshed + formatSymbolMatches(name, result.Symbols, result.MatchKind, idx)
 
 	logger.Log(Event{
 		Tool:          "find_symbol",
