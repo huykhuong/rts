@@ -21,7 +21,7 @@ type querier interface {
 func load(q querier, id int64) (Feature, error) {
 	var f Feature
 	var updated string
-	if err := q.QueryRow("SELECT name, summary, updated_at, session FROM features WHERE id = ?", id).Scan(&f.Name, &f.Summary, &updated, &f.Session); err != nil {
+	if err := q.QueryRow("SELECT name, summary, updated_at, session, branch FROM features WHERE id = ?", id).Scan(&f.Name, &f.Summary, &updated, &f.Session, &f.Branch); err != nil {
 		return f, err
 	}
 	f.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
@@ -77,6 +77,11 @@ type Summary struct {
 	Members   int
 	Changed   int // members whose file no longer matches its fingerprint
 	UpdatedAt time.Time
+
+	// OtherBranch is the branch the map matches when it is not the reader's,
+	// and "" otherwise: Changed then counts files that differ from that
+	// branch, not edits made since.
+	OtherBranch string
 }
 
 // Summaries lists every feature, most recently updated first. checkout is
@@ -126,6 +131,8 @@ func Recent(db *sql.DB, projectRoot, checkout string, limit int) ([]Summary, int
 			Members:   len(f.Members),
 			Changed:   len(changedMembers(projectRoot, checkout, f.Members)),
 			UpdatedAt: f.UpdatedAt,
+
+			OtherBranch: otherBranch(f, projectRoot, checkout),
 		})
 	}
 	return out, total, nil
@@ -346,10 +353,16 @@ func renderFeature(buf *strings.Builder, projectRoot, checkout string, f Feature
 	if !f.UpdatedAt.IsZero() {
 		mapped = " on " + f.UpdatedAt.Local().Format("2006-01-02")
 	}
-	if len(changed) == 0 {
+	other := otherBranch(f, projectRoot, checkout)
+	switch {
+	case len(changed) == 0:
 		fmt.Fprintf(buf, "Mapped%s by a session that read these files. Every name below resolved to real code when it was saved, "+
 			"and none of the files has changed since, so the members and connections can be used as they are.\n", mapped)
-	} else {
+	case other != "":
+		fmt.Fprintf(buf, "Mapped%s by a session that read these files. This map matches branch %s, and this checkout is on another branch: "+
+			"files marked [changed] differ from what was mapped, which here is likely %s's unmerged work, not later edits.\n",
+			mapped, other, other)
+	default:
 		fmt.Fprintf(buf, "Mapped%s by a session that read these files. Every name below resolved to real code when it was saved; "+
 			"files marked [changed] have been edited since.\n", mapped)
 	}
@@ -412,7 +425,11 @@ func renderFeature(buf *strings.Builder, projectRoot, checkout string, f Feature
 		}
 	}
 
-	if len(changed) > 0 {
+	if len(changed) > 0 && other != "" {
+		fmt.Fprintf(buf, "\n%d member(s) marked [changed] differ from branch %s, which this map matches. "+
+			"If your task is about that branch's work, read this map from its worktree; otherwise check the connections around them here.\n",
+			len(changed), other)
+	} else if len(changed) > 0 {
 		fmt.Fprintf(buf, "\n%d member(s) marked [changed] have been edited since this map was written. "+
 			"Confirm the connections around them before relying on them, and save the corrected map with record_feature.\n", len(changed))
 	}

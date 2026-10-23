@@ -202,3 +202,36 @@ func TestCheckouts_ListsTheMainCheckoutAndLiveWorktrees(t *testing.T) {
 		t.Errorf("Checkouts = %v, want [%s %s]", got, root, live)
 	}
 }
+
+func TestCurrentBranch_MainCheckoutAndWorktree(t *testing.T) {
+	root := t.TempDir()
+	write := func(p, s string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(s), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(root, ".git", "HEAD"), "ref: refs/heads/dev\n")
+
+	wt := t.TempDir()
+	write(filepath.Join(root, ".git", "worktrees", "bar", "HEAD"), "ref: refs/heads/huy/bar-chart\n")
+	write(filepath.Join(wt, ".git"), "gitdir: "+filepath.Join(root, ".git", "worktrees", "bar")+"\n")
+
+	detached := t.TempDir()
+	write(filepath.Join(detached, ".git", "HEAD"), "0123456789abcdef0123456789abcdef01234567\n")
+
+	for dir, want := range map[string]string{
+		root:                       "dev",
+		filepath.Join(root, "app"): "dev",
+		wt:                         "huy/bar-chart",
+		detached:                   "",
+		t.TempDir():                "",
+	} {
+		if got := CurrentBranch(dir); got != want {
+			t.Errorf("CurrentBranch(%s) = %q, want %q", dir, got, want)
+		}
+	}
+}

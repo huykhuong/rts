@@ -211,10 +211,11 @@ func nudgeLead(lead string, features []graph.FeatureRef) string {
 	for _, f := range features {
 		parts = append(parts, fmt.Sprintf("%q (%d files)", f.Name, f.Members))
 	}
-	return fmt.Sprintf("RTS: %s mapped feature(s) %s. Before reading further, call touchpoints "+
-		"with the one that matches your task: it lists that feature's other files, how they connect, "+
-		"and what earlier sessions found, so you can skip rediscovering it. You will not be reminded "+
-		"about these features again in this session.", lead, strings.Join(parts, ", "))
+	return fmt.Sprintf("RTS: %s mapped feature(s) %s. If your task goes beyond a quick lookup — "+
+		"changing this feature or tracing how its parts connect — call touchpoints with the one that matches "+
+		"before reading further: it lists that feature's other files, how they connect, and what earlier "+
+		"sessions found, so you can skip rediscovering it. For a one-line answer you already have, carry on. "+
+		"You will not be reminded about these features again in this session.", lead, strings.Join(parts, ", "))
 }
 
 // featuresNamedIn finds the features a file outside the project mentions:

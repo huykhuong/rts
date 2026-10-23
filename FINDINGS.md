@@ -516,6 +516,43 @@ indexes every worktree on the way to that answer: `touchpoints` looks a
 class up in the main index only, which kept a miss in a repo with eight
 worktrees from taking seconds.
 
+### A field report, checked against the data
+
+A steroidd session reported a day of use: `search_text`, `view_file`,
+`view_bionic_method` and `find_symbol` carried every investigation; it never
+called `touchpoints`, saved one map only because the Stop hook asked, and
+trusted the code over the maps. Its three suggestions, checked:
+
+- **Re-index after a pull — built, on the miss.** `find_symbol` found
+  nothing for a class a mid-session `git pull` had brought in; the startup
+  refresh had run before the pull. A miss now checks for drift (a tenth of
+  a second on steroidd) and, if the code has moved, reindexes (about two
+  seconds) and asks again, saying so. A git hook would have meant
+  installing scripts into every repository and would still miss changes
+  made without them.
+- **Nudge at search time — not built.** The session skipped `touchpoints`
+  because one search had already answered a one-line question, which was
+  right: a map pays off for work across many files, not a lookup. Nudging
+  on search results would fire earlier and name more maps for the same
+  outcome. The nudge now says so itself: call `touchpoints` if the task
+  goes beyond a quick lookup, carry on if the answer is in hand.
+- **Down-weight shared files in the duplicate check — not built; the data
+  disagreed.** The refused map's 7 files were all in "integration landscape
+  board", its edit-marker audit and tests included — a slice of a bigger
+  map, not shared plumbing alone. Ignoring files found in 3 or more maps
+  still flagged it, and stopped catching the real duplicate. File overlap
+  cannot tell a sub-feature from a repeat; `distinct_from` handled it in
+  one resave, as designed.
+
+What lowered the session's trust most was a fourth thing: "27 changed
+since" on maps it read from dev. Checked from dev, 22 of "html bar chart
+board"'s 24 files differed and none was missing — it had been mapped on an
+unmerged branch. A map now records its branch (graph schema 5), `rts index`
+fills it in once for older maps from the checkout whose files match most of
+them (12 of steroidd's 14), and a map read from another branch says which
+branch it matches and that differing files are likely that branch's
+unmerged work.
+
 ### Maps can include a branch's own code
 
 Names were first checked only against the main checkout's index, built from

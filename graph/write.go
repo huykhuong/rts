@@ -43,6 +43,13 @@ type Feature struct {
 	UpdatedAt time.Time
 	Session   string
 
+	// Branch is the branch this map matches: the one checked out where it
+	// was saved, or, for a map saved before branches were recorded, the one
+	// whose files match it best. Read from another branch, a member that
+	// differs may only be that branch's unmerged work, not an edit made
+	// since.
+	Branch string
+
 	// refPaths is the file each resolved ref was found in, members and edge
 	// ends alike. Record keeps it in the refs table, which is how Prune can
 	// tell branch-only code that still exists from code that is gone.
@@ -460,7 +467,7 @@ func Record(db *sql.DB, f Feature) (replaced bool, err error) {
 	err = tx.QueryRow("SELECT id FROM features WHERE name = ?", f.Name).Scan(&id)
 	switch {
 	case err == sql.ErrNoRows:
-		res, err := tx.Exec("INSERT INTO features (name, summary, updated_at, session) VALUES (?, ?, ?, ?)", f.Name, f.Summary, now, f.Session)
+		res, err := tx.Exec("INSERT INTO features (name, summary, updated_at, session, branch) VALUES (?, ?, ?, ?, ?)", f.Name, f.Summary, now, f.Session, f.Branch)
 		if err != nil {
 			return false, err
 		}
@@ -491,7 +498,7 @@ func Record(db *sql.DB, f Feature) (replaced bool, err error) {
 				return false, err
 			}
 		}
-		if _, err := tx.Exec("UPDATE features SET name = ?, summary = ?, updated_at = ?, session = ? WHERE id = ?", f.Name, f.Summary, now, f.Session, id); err != nil {
+		if _, err := tx.Exec("UPDATE features SET name = ?, summary = ?, updated_at = ?, session = ?, branch = ? WHERE id = ?", f.Name, f.Summary, now, f.Session, f.Branch, id); err != nil {
 			return false, err
 		}
 	}

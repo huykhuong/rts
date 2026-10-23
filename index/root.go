@@ -172,3 +172,36 @@ func Checkouts(root string) []string {
 	}
 	return out
 }
+
+// CurrentBranch returns the branch checked out in the checkout containing
+// dir, read from git's HEAD file, or "" outside a repo or on a detached HEAD.
+func CurrentBranch(dir string) string {
+	gitPath, ok := findDotGit(dir)
+	if !ok {
+		return ""
+	}
+	gitDir := gitPath
+	if info, err := os.Stat(gitPath); err == nil && !info.IsDir() {
+		data, err := os.ReadFile(gitPath)
+		if err != nil {
+			return ""
+		}
+		target, ok := parseGitdirFile(string(data))
+		if !ok {
+			return ""
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(gitPath), target)
+		}
+		gitDir = target
+	}
+	head, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	if err != nil {
+		return ""
+	}
+	ref, ok := strings.CutPrefix(strings.TrimSpace(string(head)), "ref: refs/heads/")
+	if !ok {
+		return ""
+	}
+	return ref
+}

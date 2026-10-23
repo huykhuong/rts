@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"rts/graph"
+	"rts/index"
 )
 
 // handleRecordFeature resolves a feature map against the index and stores it.
@@ -44,6 +45,7 @@ func handleRecordFeature(args map[string]json.RawMessage, id json.RawMessage, ro
 	}
 	f.Notes = stringListArg(args, "notes")
 	f.Session = session
+	f.Branch = index.CurrentBranch(checkoutOrRoot(root))
 
 	idx, err := indexCache.Get()
 	if err != nil {
@@ -117,6 +119,13 @@ func handleRecordFeature(args map[string]json.RawMessage, id json.RawMessage, ro
 	})
 
 	sendText(id, text)
+}
+
+func checkoutOrRoot(root string) string {
+	if checkoutRoot != "" {
+		return checkoutRoot
+	}
+	return root
 }
 
 // handleTouchpoints answers a feature or class name from the graph.

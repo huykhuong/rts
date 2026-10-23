@@ -211,7 +211,10 @@ func renderFeatures(buf *strings.Builder, features featureList) {
 
 	for _, f := range features.shown {
 		line := fmt.Sprintf("  %s — %s, mapped %s", f.Name, plural(f.Members, "member"), f.UpdatedAt.Local().Format("2006-01-02"))
-		if f.Changed > 0 {
+		switch {
+		case f.Changed > 0 && f.OtherBranch != "":
+			line += fmt.Sprintf(" (%d differ here; matches branch %s)", f.Changed, f.OtherBranch)
+		case f.Changed > 0:
 			line += fmt.Sprintf(" (%d changed since)", f.Changed)
 		}
 		buf.WriteString(line + "\n")

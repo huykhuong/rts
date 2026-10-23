@@ -221,6 +221,11 @@ func pruneGraph(root string, symbols []index.Symbol) {
 		fmt.Fprintf(os.Stderr, "[rts index] feature graph: dropped %d member(s), %d edge(s) and %d feature(s) for code that no longer exists\n",
 			res.Members, res.Edges, res.Features)
 	}
+	if n, err := graph.InferBranches(db, root); err != nil {
+		fmt.Fprintf(os.Stderr, "[rts index] could not work out which branch older maps were saved on: %v\n", err)
+	} else if n > 0 {
+		fmt.Fprintf(os.Stderr, "[rts index] feature graph: recorded the branch of %d map(s) saved before branches were\n", n)
+	}
 }
 
 func runGraph(args []string) {
@@ -261,7 +266,10 @@ func runGraph(args []string) {
 	}
 	for _, f := range features {
 		line := fmt.Sprintf("%-40s %3d members  mapped %s", f.Name, f.Members, f.UpdatedAt.Local().Format("2006-01-02"))
-		if f.Changed > 0 {
+		switch {
+		case f.Changed > 0 && f.OtherBranch != "":
+			line += fmt.Sprintf("  (%d differ here; matches branch %s)", f.Changed, f.OtherBranch)
+		case f.Changed > 0:
 			line += fmt.Sprintf("  (%d changed since)", f.Changed)
 		}
 		fmt.Println(cliRedactor().Redact(line))

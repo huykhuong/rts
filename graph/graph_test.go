@@ -700,3 +700,97 @@ func TestOverlaps_FlagsADuplicateButNotARelatedFeature(t *testing.T) {
 		t.Errorf("a feature overlapped itself: %+v", overlaps)
 	}
 }
+
+func TestTouchpoints_SaysWhenAMapWasSavedOnAnotherBranch(t *testing.T) {
+	root, idx := project(t)
+	wt := withWorktree(t, root)
+	write(t, root, ".git/HEAD", "ref: refs/heads/dev\n")
+	write(t, root, ".git/worktrees/wt/HEAD", "ref: refs/heads/huy/bar-chart\n")
+	db := open_(t, root)
+
+	f := barChart()
+	f.Branch = "huy/bar-chart"
+	if problems := Resolve(root, wt, idx, &f); len(problems) > 0 {
+		t.Fatal(problems)
+	}
+	if _, err := Record(db, f); err != nil {
+		t.Fatal(err)
+	}
+
+	fromDev, _ := Touchpoints(db, root, root, idx, "bar chart", 1)
+	if !strings.Contains(fromDev, "matches branch huy/bar-chart") || !strings.Contains(fromDev, "unmerged work, not later edits") {
+		t.Errorf("read from dev, the map should say its differences are the branch's work:\n%s", fromDev)
+	}
+	if fromBranch, _ := Touchpoints(db, root, wt, idx, "bar chart", 1); strings.Contains(fromBranch, "matches branch") {
+		t.Errorf("read from its own branch, the map should not mention branches:\n%s", fromBranch)
+	}
+
+	summaries, _ := Summaries(db, root, root)
+	if len(summaries) != 1 || summaries[0].OtherBranch != "huy/bar-chart" || summaries[0].Changed == 0 {
+		t.Errorf("the summary read from dev should carry the other branch: %+v", summaries)
+	}
+}
+
+func TestOpen_AddsTheBranchColumnToAVersionFourGraph(t *testing.T) {
+	root, idx := project(t)
+	db := open_(t, root)
+	saved(t, db, root, idx, boardTemplates())
+	if _, err := db.Exec("ALTER TABLE features DROP COLUMN branch; PRAGMA user_version = 4"); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	upgraded, err := Open(root)
+	if err != nil {
+		t.Fatalf("opening a version 4 graph: %v", err)
+	}
+	defer func() { _ = upgraded.Close() }()
+
+	f := boardTemplates()
+	f.Branch = "dev"
+	if problems := Resolve(root, "", idx, &f); len(problems) > 0 {
+		t.Fatal(problems)
+	}
+	if _, err := Record(upgraded, f); err != nil {
+		t.Errorf("saving after the upgrade: %v", err)
+	}
+}
+
+func TestInferBranches_FindsWhereAnOlderMapWasSaved(t *testing.T) {
+	root, idx := project(t)
+	wt := withWorktree(t, root)
+	write(t, root, ".git/HEAD", "ref: refs/heads/dev\n")
+	write(t, root, ".git/worktrees/wt/HEAD", "ref: refs/heads/huy/bar-chart\n")
+	db := open_(t, root)
+
+	f := barChart() // no Branch, as every map saved before it was recorded
+	if problems := Resolve(root, wt, idx, &f); len(problems) > 0 {
+		t.Fatal(problems)
+	}
+	if _, err := Record(db, f); err != nil {
+		t.Fatal(err)
+	}
+	saved(t, db, root, idx, boardTemplates()) // saved from dev's files
+
+	n, err := InferBranches(db, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("expected both maps' branches filled in, got %d", n)
+	}
+	got := map[string]string{}
+	rows, _ := db.Query("SELECT name, branch FROM features")
+	for rows.Next() {
+		var name, branch string
+		_ = rows.Scan(&name, &branch)
+		got[name] = branch
+	}
+	_ = rows.Close()
+	if got["bar chart"] != "huy/bar-chart" || got["board templates"] != "dev" {
+		t.Errorf("branches = %v", got)
+	}
+	if again, _ := InferBranches(db, root); again != 0 {
+		t.Errorf("a settled map should not be revisited, got %d", again)
+	}
+}
