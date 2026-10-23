@@ -391,8 +391,8 @@ refuse to store a map that is not about real code:
   reader is told to confirm around it. Most of a stale map is still right.
 - **On `rts index`**, members and edges naming code that no longer exists are
   dropped, and a feature with no members left goes with them.
-- Saving a feature that already exists **replaces** its map; the old one is
-  kept in `feature_history`. Notes and structure are rendered separately, the
+- Saving a feature that already exists **replaces** its map; the last three
+  replaced versions are kept in `feature_history`, older ones dropped. Notes and structure are rendered separately, the
   notes under the same "not verified" label as findings.
 
 ### Why this store is SQLite

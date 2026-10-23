@@ -2,6 +2,7 @@ package graph
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -792,5 +793,36 @@ func TestInferBranches_FindsWhereAnOlderMapWasSaved(t *testing.T) {
 	}
 	if again, _ := InferBranches(db, root); again != 0 {
 		t.Errorf("a settled map should not be revisited, got %d", again)
+	}
+}
+
+func TestRecord_KeepsOnlyTheLastThreeVersions(t *testing.T) {
+	root, idx := project(t)
+	db := open_(t, root)
+
+	for i := 0; i < 6; i++ {
+		f := boardTemplates()
+		f.Summary = fmt.Sprintf("version %d", i)
+		saved(t, db, root, idx, f)
+	}
+
+	rows, err := db.Query("SELECT snapshot FROM feature_history WHERE name = 'board templates' ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var kept []string
+	for rows.Next() {
+		var snap string
+		_ = rows.Scan(&snap)
+		for v := 0; v < 6; v++ {
+			if strings.Contains(snap, fmt.Sprintf(`"Summary":"version %d"`, v)) {
+				kept = append(kept, fmt.Sprint(v))
+			}
+		}
+	}
+	// Six saves replace five versions (0–4); the last three of those stay.
+	if strings.Join(kept, ",") != "2,3,4" {
+		t.Errorf("history kept versions %v, want 2,3,4", kept)
 	}
 }

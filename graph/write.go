@@ -33,6 +33,9 @@ const (
 	MaxEdges   = 120
 )
 
+// maxHistory is how many replaced versions of a map are kept.
+const maxHistory = 3
+
 // Feature is one feature map as a session writes it and as it is read back.
 type Feature struct {
 	Name      string
@@ -487,6 +490,12 @@ func Record(db *sql.DB, f Feature) (replaced bool, err error) {
 			return false, err
 		}
 		if _, err := tx.Exec("INSERT INTO feature_history (name, snapshot, replaced_at) VALUES (?, ?, ?)", old.Name, string(snapshot), now); err != nil {
+			return false, err
+		}
+		// Keep the last few versions, enough to undo a bad rewrite or two;
+		// every re-save would otherwise add one forever.
+		if _, err := tx.Exec(`DELETE FROM feature_history WHERE name = ?1 COLLATE NOCASE AND id NOT IN (
+			SELECT id FROM feature_history WHERE name = ?1 COLLATE NOCASE ORDER BY id DESC LIMIT ?2)`, old.Name, maxHistory); err != nil {
 			return false, err
 		}
 		for _, stmt := range []string{
