@@ -68,6 +68,10 @@ type Options struct {
 	// map's "changed since" is judged against. Empty means the root.
 	Checkout string
 
+	// Full renders everything regardless of size. project_map uses it: a
+	// tool's result is not cut the way a hook's output is.
+	Full bool
+
 	// Refreshing says a reindex was started in the background for this
 	// session. The map below it is then the previous run's, and the brief
 	// says so instead of telling the reader to do what is already happening.
@@ -101,24 +105,52 @@ func Render(projectRoot string, opts Options) string {
 		return ""
 	}
 
-	var buf strings.Builder
-
-	if pm != nil {
-		renderMap(&buf, pm)
+	// What a session most needs comes first — the mapped features and how
+	// to use them — and the folder layout last, because Claude Code shows a
+	// SessionStart hook's output in full only up to about 10,000 characters
+	// and saves anything longer to a file, previewing just its start. At
+	// 12,481 characters steroidd's brief was cut there, and its sessions
+	// never saw the "Mapped features" list below the layout table.
+	render := func(maxFindings int, layout bool) string {
+		var buf strings.Builder
+		if pm != nil {
+			renderMap(&buf, pm)
+		}
+		renderFeatures(&buf, features)
+		renderFindings(&buf, findings, maxFindings)
+		if pm != nil {
+			renderStaleness(&buf, projectRoot, pm, opts)
+		}
+		if pm == nil {
+			buf.WriteString("\nNo project map for this repo — run `rts index` to build one.\n")
+		}
+		renderFooter(&buf, pm)
+		if layout && pm != nil {
+			renderLayout(&buf, pm)
+		}
+		return buf.String()
 	}
-	renderFeatures(&buf, features)
-	renderFindings(&buf, findings)
 
-	if pm != nil {
-		renderStaleness(&buf, projectRoot, pm, opts)
-	}
-	if pm == nil {
-		buf.WriteString("\nNo project map for this repo — run `rts index` to build one.\n")
+	full := render(maxRenderedInsights, true)
+	if opts.Full || len(full) <= briefBudget {
+		return full
 	}
 
-	renderFooter(&buf, pm)
-	return buf.String()
+	// Over budget: drop the layout (project_map has it), then show fewer
+	// findings, until it fits.
+	for _, n := range []int{maxRenderedInsights, 6, 3, 0} {
+		text := render(n, false)
+		if len(text) <= briefBudget || n == 0 {
+			return text + "\n(Folder layout and the most-read and largest files are left out to keep this short: call project_map for them.)\n"
+		}
+	}
+	return full
 }
+
+// briefBudget keeps the brief under the size Claude Code shows in full for a
+// SessionStart hook (about 10,000 characters), with room to spare. A
+// variable so a test can make a small project overflow it.
+var briefBudget = 8000
 
 func renderMap(buf *strings.Builder, pm *index.ProjectMap) {
 	fmt.Fprintf(buf, "=== rts project map: %s", pm.Name)
@@ -134,7 +166,12 @@ func renderMap(buf *strings.Builder, pm *index.ProjectMap) {
 	if len(pm.EntryPoints) > 0 {
 		fmt.Fprintf(buf, "\nEntry points: %s\n", strings.Join(pm.EntryPoints, ", "))
 	}
+}
 
+// renderLayout prints where the code lives, the files sessions read most and
+// the largest files. It is the most expendable part of the brief — a session
+// can ask for it with project_map — so it comes last and is trimmed first.
+func renderLayout(buf *strings.Builder, pm *index.ProjectMap) {
 	if len(pm.Dirs) > 0 {
 		buf.WriteString("\nWhere the code lives (symbols / files):\n")
 		width := 0
@@ -228,14 +265,14 @@ func renderFeatures(buf *strings.Builder, features featureList) {
 // renderFindings prints the recorded notes under a label that cannot be
 // misread. The caveat is attached to the section rather than repeated per
 // line: a warning printed on every row is one nobody reads.
-func renderFindings(buf *strings.Builder, findings []insight.Insight) {
+func renderFindings(buf *strings.Builder, findings []insight.Insight, limit int) {
 	if len(findings) == 0 {
 		return
 	}
 
 	shown := findings
-	if len(shown) > maxRenderedInsights {
-		shown = shown[:maxRenderedInsights]
+	if len(shown) > limit {
+		shown = shown[:limit]
 	}
 
 	fmt.Fprintf(buf, "\n--- Recorded findings (%d) ---\n", len(findings))

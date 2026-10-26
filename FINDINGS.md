@@ -516,6 +516,31 @@ indexes every worktree on the way to that answer: `touchpoints` looks a
 class up in the main index only, which kept a miss in a repo with eight
 worktrees from taking seconds.
 
+### Where a session actually looks
+
+A steroidd session asked whether it would reach for `touchpoints` said: not
+reliably, and gave three reasons, all checked true.
+
+- **The brief was too long to be shown.** Claude Code shows a SessionStart
+  hook's output in full only up to about 10,000 characters; past that it
+  saves it to a file and the session sees a preview of the start. steroidd's
+  brief had grown to 12,481 characters, and its "Mapped features" list sat
+  below a 40-line folder table — never in the preview. The brief now leads
+  with the map list and tool guidance, puts the folder layout last, and
+  keeps itself under 8,000 characters by dropping the layout (then trimming
+  findings) when it must; `project_map` still returns all of it. steroidd's
+  brief is now 6,726 characters with the maps at line 6; Hangout's 6,298.
+- **The tools are loaded on demand,** so their descriptions — "call this
+  before exploring" — are out of sight while a session plans. RTS now sends
+  MCP server instructions, which Claude Code puts in every session's system
+  prompt whether or not the tools are loaded: call `touchpoints` with a
+  feature name or a word or two before exploring, use the RTS read and
+  search tools, save what you explored with `record_feature`. A test session
+  quoted them back from its system prompt.
+- **The reminders come late or miss.** True of the read reminder by design;
+  the message reminder and the dispatch rule cover the start of a task, and
+  the instructions now cover planning.
+
 ### A field report, checked against the data
 
 A steroidd session reported a day of use: `search_text`, `view_file`,

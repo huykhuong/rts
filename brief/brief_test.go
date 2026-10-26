@@ -311,3 +311,36 @@ func TestRender_PastThirtyListsTenAndPointsAtTheSearch(t *testing.T) {
 		t.Errorf("the brief should say how to find the rest:\n%s", text)
 	}
 }
+
+func TestRender_StaysUnderTheHookLimitAndKeepsTheMapsFirst(t *testing.T) {
+	root := project(t)
+	withFeatures(t, root, 30)
+	for i := 0; i < 20; i++ {
+		if _, _, err := insight.Record(root, insight.Insight{
+			Title: fmt.Sprintf("Finding %02d about the codebase", i),
+			Body:  strings.Repeat("A long explanation of a non-obvious convention. ", 8),
+		}, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	full := Render(root, Options{SkipStaleness: true, Full: true})
+	previous := briefBudget
+	briefBudget = len(full) - 500 // just over budget, so the layout has to go
+	t.Cleanup(func() { briefBudget = previous })
+
+	text := Render(root, Options{SkipStaleness: true})
+	if len(text) > briefBudget+200 {
+		t.Errorf("the brief is %d characters, over the %d budget", len(text), briefBudget)
+	}
+	if strings.Index(text, "--- Mapped features") > strings.Index(text, "--- Recorded findings") {
+		t.Error("mapped features should come before findings")
+	}
+	if !strings.Contains(text, "call project_map for them") {
+		t.Errorf("a trimmed brief should say where the rest is:\n%s", text)
+	}
+
+	if len(full) <= len(text) {
+		t.Error("project_map's full brief should hold more than the trimmed one")
+	}
+}
