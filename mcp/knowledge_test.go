@@ -523,3 +523,24 @@ func TestReadToolsAreMarkedReadOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestInitializeGivesStandingInstructions(t *testing.T) {
+	// Claude Code loads MCP tools on demand, so the instructions are what a
+	// session sees while it plans.
+	out := captureStdout(t, func() { handleInitialize(json.RawMessage("1")) })
+
+	var decoded struct {
+		Result struct {
+			Instructions string `json:"instructions"`
+			ServerInfo   struct {
+				Name string `json:"name"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatalf("initialize is not valid JSON: %v\n%s", err, out)
+	}
+	if decoded.Result.ServerInfo.Name != "rts" || !strings.Contains(decoded.Result.Instructions, "call touchpoints") {
+		t.Errorf("initialize should name the server and tell sessions to call touchpoints: %s", out)
+	}
+}

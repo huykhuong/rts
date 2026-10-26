@@ -93,9 +93,30 @@ func Start(buildTime string) {
 }
 
 // handleInitialize answers the initial handshake when Claude Code starts up.
+// serverInstructions go into the session's system prompt for as long as
+// RTS is connected. They are the one place a session reliably reads before
+// planning: Claude Code loads MCP tools on demand, so a tool's own
+// description is out of sight until the session already decided to use it,
+// and a steroidd session said as much — it never called touchpoints because
+// nothing it read while planning mentioned it.
+const serverInstructions = "RTS keeps an index of this codebase and feature maps that earlier sessions saved. " +
+	"Before exploring a feature, reading around, or sending an Explore agent, call touchpoints with the feature's name " +
+	"or a word or two about the task (e.g. 'capsule', 'pdf sizing'): if it is mapped, you get its files, how they connect " +
+	"and what earlier sessions found in one call; if not, it says so. project_map gives the whole-project overview. " +
+	"Read files with view_file, outline a big one with view_bionic_skeleton, pull out one method with view_bionic_method, " +
+	"search with search_text and find a definition with find_symbol, in place of Read, cat, grep or sed. " +
+	"When you have explored something no map covers, save it with record_feature so the next session can skip the exploring."
+
 func handleInitialize(id json.RawMessage) {
 	// MCP requires a basic acknowledgment response to prove the server is alive.
-	writeLine(fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"rts","version":%q}}}`, id, buildVersion))
+	result := map[string]interface{}{
+		"protocolVersion": "2024-11-05",
+		"capabilities":    map[string]interface{}{"tools": map[string]interface{}{}},
+		"serverInfo":      map[string]interface{}{"name": "rts", "version": buildVersion},
+		"instructions":    serverInstructions,
+	}
+	out, _ := json.Marshal(map[string]interface{}{"jsonrpc": "2.0", "id": id, "result": result})
+	writeLine(string(out))
 }
 
 // handleToolsList advertises our skeletonizer tool directly to Claude's brain.
